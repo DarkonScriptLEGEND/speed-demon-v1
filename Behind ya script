@@ -2,47 +2,56 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local SoundService = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
-local function getCharacter(plr)
-	return plr.Character or plr.CharacterAdded:Wait()
+local character = function()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 end
 
-local function getHRP(plr)
-	return getCharacter(plr):WaitForChild("HumanoidRootPart", 5)
+local function getHRP()
+    return character():WaitForChild("HumanoidRootPart", 5)
 end
 
 local function safeCFrame(pos)
-	local size = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
-	if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z then
-		return false
-	end
-	local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
-	local parts = Workspace:FindPartsInRegion3(region, nil, 5)
-	for _, p in pairs(parts) do
-		if p.CanCollide and p.Transparency < 0.95 then return true end
-	end
-	return false
+    local size = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
+    if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z or pos.Y < -10 then
+        return false
+    end
+    local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
+    local parts = Workspace:FindPartsInRegion3(region, nil, 5)
+    for _, p in pairs(parts) do
+        if p.CanCollide and p.Transparency < 0.95 then return true end
+    end
+    return false
 end
 
 local function getFurthest()
-	local root = getHRP(LocalPlayer)
-	local best = root.Position
-	local maxDist = 0
-	for _, part in pairs(Workspace:GetDescendants()) do
-		if part:IsA("BasePart") then
-			local pos = part.Position + Vector3.new(0, 5, 0)
-			if safeCFrame(pos) then
-				local dist = (pos - root.Position).Magnitude
-				if dist > maxDist then
-					maxDist = dist
-					best = pos
-				end
-			end
-		end
-	end
-	return best
+    local root = getHRP()
+    local best = root.Position
+    local maxDist = 0
+    for _, part in pairs(Workspace:GetDescendants()) do
+        if part:IsA("BasePart") then
+            local pos = part.Position + Vector3.new(0, 5, 0)
+            if safeCFrame(pos) then
+                local dist = (pos - root.Position).Magnitude
+                if dist > maxDist then
+                    maxDist = dist
+                    best = pos
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function teleportTo(pos)
+    local root = getHRP()
+    if not safeCFrame(pos) then return end
+    root.CFrame = CFrame.new(pos)
+    teleportSound:Play()
+    playTeleportAnimation()
 end
 
 --// GUI Setup
@@ -66,149 +75,133 @@ viewBtn.TextColor3 = Color3.new(1, 1, 1)
 local unviewBtn = Instance.new("TextButton", gui)
 unviewBtn.Size = UDim2.new(0, 130, 0, 30)
 unviewBtn.Position = UDim2.new(0, 10, 0, 85)
-unviewBtn.Text = "🔙 Unview Self"
+unviewBtn.Text = "💙 Unview Self"
 unviewBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 unviewBtn.TextColor3 = Color3.new(1, 1, 1)
 
-local statusText = Instance.new("TextLabel", gui)
-statusText.Size = UDim2.new(1, 0, 0, 30)
-statusText.Position = UDim2.new(0, 0, 1, -30)
-statusText.BackgroundTransparency = 1
-statusText.TextColor3 = Color3.fromRGB(0, 255, 0)
-statusText.TextScaled = true
-statusText.Visible = false
+--// Teleport Sound
+local teleportSound = Instance.new("Sound", SoundService)
+teleportSound.SoundId = "rbxassetid://9118823102"
+teleportSound.Volume = 2
 
+--// Teleport Animation
+local function playTeleportAnimation()
+    local humanoid = character():FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://9133762206"
+        local track = humanoid:LoadAnimation(anim)
+        track:Play()
+    end
+end
+
+--// Poof Message
+local function showPoof()
+    local root = getHRP()
+    local poof = Instance.new("BillboardGui", root)
+    poof.Size = UDim2.new(0, 200, 0, 50)
+    poof.Adornee = root
+    poof.AlwaysOnTop = true
+    local label = Instance.new("TextLabel", poof)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = "Poof"
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextScaled = true
+    task.delay(1, function() poof:Destroy() end)
+end
+
+--// Cooldown Indicator
 local cooldownLabel = Instance.new("TextLabel", gui)
-cooldownLabel.Size = UDim2.new(0, 160, 0, 25)
-cooldownLabel.Position = UDim2.new(0, 10, 0, 120)
+cooldownLabel.Size = UDim2.new(0, 150, 0, 25)
+cooldownLabel.Position = UDim2.new(0, 10, 0, 125)
 cooldownLabel.BackgroundTransparency = 1
-cooldownLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+cooldownLabel.TextColor3 = Color3.new(0, 1, 0)
 cooldownLabel.TextScaled = true
 cooldownLabel.Text = ""
-cooldownLabel.Parent = gui
 
---// Sounds
-local teleportSound = Instance.new("Sound", game:GetService("SoundService"))
-teleportSound.SoundId = "rbxassetid://12222242"
-teleportSound.Volume = 1
+--// Self Destruct Logic
+local function selfDestructSequence()
+    local root = getHRP()
+    local startTime = tick()
+    local warning = Instance.new("BillboardGui", root)
+    warning.Size = UDim2.new(0, 250, 0, 50)
+    warning.Adornee = root
+    warning.AlwaysOnTop = true
+    local label = Instance.new("TextLabel", warning)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = "SELF DESTRUCT"
+    label.TextColor3 = Color3.new(1, 0, 0)
+    label.TextScaled = true
 
-local bypassSound = Instance.new("Sound", game:GetService("SoundService"))
-bypassSound.SoundId = "rbxassetid://9120454324"
-bypassSound.Volume = 1
+    task.delay(5, function()
+        warning:Destroy()
+        local midMap = Vector3.new(0, 250, 0)
+        for i = 1, 10 do
+            teleportTo(midMap + Vector3.new(0, (i % 2 == 0 and 15 or -15), 0))
+            task.wait(0.35)
+        end
+        getHRP().Anchored = false
+    end)
+end
 
---// Variables
-local running = false
+--// Teleport Out If Stuck
+local function checkIfStuck()
+    local root = getHRP()
+    if root.Position.Y < -10 or not safeCFrame(root.Position) then
+        task.wait(0.1)
+        teleportTo(getFurthest())
+        cooldownLabel.Text = "Successfully bypassed anti cheat"
+        task.delay(3, function() cooldownLabel.Text = "" end)
+        return true
+    end
+    return false
+end
+
+--// Main Logic
+local enabled = false
 local cooldown = false
-local lastSafePos = getHRP(LocalPlayer).Position
 
---// Helper Functions
-local function showFloatingText(txt, color)
-	local gui = Instance.new("BillboardGui", getHRP(LocalPlayer))
-	gui.Size = UDim2.new(0, 200, 0, 50)
-	gui.StudsOffset = Vector3.new(0, 3, 0)
-	gui.AlwaysOnTop = true
-
-	local lbl = Instance.new("TextLabel", gui)
-	lbl.Size = UDim2.new(1, 0, 1, 0)
-	lbl.BackgroundTransparency = 1
-	lbl.Text = txt
-	lbl.TextColor3 = color
-	lbl.TextScaled = true
-
-	task.delay(1, function() gui:Destroy() end)
-end
-
-local function teleportSafely(pos)
-	local root = getHRP(LocalPlayer)
-	lastSafePos = root.Position
-	root.CFrame = CFrame.new(pos)
-	teleportSound:Play()
-end
-
-local function handleStuckCheck()
-	task.delay(0.1, function()
-		local root = getHRP(LocalPlayer)
-		if root.Position.Y < 3 then
-			root.CFrame = CFrame.new(lastSafePos)
-			bypassSound:Play()
-			statusText.Text = "✅ Successfully bypassed anti cheat"
-			statusText.Visible = true
-			task.delay(3, function() statusText.Visible = false end)
-			cooldown = true
-			running = false
-			toggleBtn.Text = "Behind Ya: OFF"
-			toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
-			task.delay(2.3, function() cooldown = false end)
-		end
-	end)
-end
-
---// Core Logic
-RunService.Heartbeat:Connect(function()
-	if not running or cooldown then return end
-
-	local myHRP = getHRP(LocalPlayer)
-	local nearest, dist = nil, math.huge
-
-	for _, plr in pairs(Players:GetPlayers()) do
-		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-			local d = (plr.Character.HumanoidRootPart.Position - myHRP.Position).Magnitude
-			if d < dist and d <= 85 then
-				dist = d
-				nearest = plr
-			end
-		end
-	end
-
-	if nearest then
-		local tHRP = getHRP(nearest)
-		local backPos = tHRP.Position - tHRP.CFrame.LookVector * 45
-		if safeCFrame(backPos) then
-			teleportSafely(backPos)
-		else
-			teleportSafely(getFurthest())
-		end
-		showFloatingText("💨 Poof", Color3.new(1, 1, 1))
-		handleStuckCheck()
-		cooldown = true
-		local t = 2.3
-		while t > 0 do
-			cooldownLabel.Text = "⏳ Cooldown: " .. string.format("%.1f", t)
-			t -= 0.1
-			task.wait(0.1)
-		end
-		cooldownLabel.Text = ""
-		cooldown = false
-	end
-end)
-
---// Toggle button
 toggleBtn.MouseButton1Click:Connect(function()
-	running = not running
-	toggleBtn.Text = "Behind Ya: " .. (running and "ON" or "OFF")
-	toggleBtn.BackgroundColor3 = running and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
+    enabled = not enabled
+    toggleBtn.Text = "Behind Ya: " .. (enabled and "ON" or "OFF")
+    toggleBtn.BackgroundColor3 = enabled and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
 end)
 
---// View buttons
-viewBtn.MouseButton1Click:Connect(function()
-	local list = {}
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p ~= LocalPlayer then
-			table.insert(list, p)
-		end
-	end
-	if #list > 0 then
-		local random = list[math.random(1, #list)]
-		Camera.CameraSubject = getHRP(random)
-	end
-end)
+RunService.Heartbeat:Connect(function()
+    if not enabled or cooldown then return end
+    local root = getHRP()
+    local closest, distance = nil, math.huge
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local theirRoot = plr.Character.HumanoidRootPart
+            local dist = (theirRoot.Position - root.Position).Magnitude
+            if dist < 85 and dist < distance then
+                closest, distance = theirRoot, dist
+            end
+        end
+    end
+    if closest then
+        local direction = (closest.Position - root.Position).Unit * -45
+        local behindPos = closest.Position + direction
+        if not safeCFrame(behindPos) then
+            if not checkIfStuck() then
+                behindPos = getFurthest()
+            end
+        end
+        teleportTo(behindPos)
+        showPoof()
 
-unviewBtn.MouseButton1Click:Connect(function()
-	Camera.CameraSubject = getCharacter(LocalPlayer):FindFirstChild("Humanoid")
-end)
+        if (closest.Position - root.Position).Magnitude < 6 then
+            selfDestructSequence()
+        end
 
--- Respawn handling
-LocalPlayer.CharacterAdded:Connect(function(char)
-	char:WaitForChild("HumanoidRootPart")
-	lastSafePos = char.HumanoidRootPart.Position
+        cooldown = true
+        cooldownLabel.Text = "Cooldown..."
+        task.delay(2.3, function()
+            cooldown = false
+            cooldownLabel.Text = ""
+        end)
+    end
 end)
