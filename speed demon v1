@@ -1,194 +1,239 @@
+--// Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local Debris = game:GetService("Debris")
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+local Humanoid = Character:WaitForChild("Humanoid")
 
-local player = Players.LocalPlayer
-local MAP_BOUNDS = 5000
-local BASE_SPEED = 16
-local TELEPORT_DISTANCE = 75
-local TELEPORT_SPEED_BOOST = 45
-local TELEPORT_BOOST_TIME = 1.5
-local DETECT_RADIUS = 45
-local NEAR_PLAYER_RADIUS = 35
-local TELEPORT_SOUND_ID = "rbxassetid://184352058"
-local TELEPORT_PARTICLE = "rbxassetid://243098098"
-local TELEPORT_COOLDOWN = 0.95
+--// UI Setup
+local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Name = "SpeedDemonV1"
 
-local runAwayEnabled = false
-local chaseEnabled = false
-local lastTeleport = 0
-local char, hrp, humanoid
+local Icon = Instance.new("TextButton")
+Icon.Text = "Speed Demon V1"
+Icon.Size = UDim2.new(0, 120, 0, 40)
+Icon.Position = UDim2.new(0.5, -60, 0.5, -100)
+Icon.BackgroundColor3 = Color3.new(0, 0, 0)
+Icon.TextColor3 = Color3.new(1, 1, 1)
+Icon.Draggable = true
+Icon.Active = true
+Icon.Parent = ScreenGui
 
--- Bind character
-local function bindCharacter()
-	char = player.Character or player.CharacterAdded:Wait()
-	hrp = char:WaitForChild("HumanoidRootPart")
-	humanoid = char:WaitForChild("Humanoid")
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 200, 0, 160) -- Increased height for new button
+MainFrame.Position = UDim2.new(0.5, -100, 0.5, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+MainFrame.Visible = false
+MainFrame.Parent = ScreenGui
+
+local RunAwayBtn = Instance.new("TextButton")
+RunAwayBtn.Text = "Run Away"
+RunAwayBtn.Size = UDim2.new(0, 180, 0, 40)
+RunAwayBtn.Position = UDim2.new(0, 10, 0, 10)
+RunAwayBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+RunAwayBtn.TextColor3 = Color3.new(1, 1, 1)
+RunAwayBtn.Parent = MainFrame
+
+local StopBtn = Instance.new("TextButton")
+StopBtn.Text = "Stop"
+StopBtn.Size = UDim2.new(0, 180, 0, 40)
+StopBtn.Position = UDim2.new(0, 10, 0, 60)
+StopBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+StopBtn.TextColor3 = Color3.new(1, 1, 1)
+StopBtn.Parent = MainFrame
+
+local UltimateBtn = Instance.new("TextButton")
+UltimateBtn.Text = "Ultimate Form"
+UltimateBtn.Size = UDim2.new(0, 180, 0, 40)
+UltimateBtn.Position = UDim2.new(0, 10, 0, 110)
+UltimateBtn.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- Orange color
+UltimateBtn.TextColor3 = Color3.new(0, 0, 0)
+UltimateBtn.Parent = MainFrame
+
+--// Toggle GUI
+Icon.MouseButton1Click:Connect(function()
+	MainFrame.Visible = not MainFrame.Visible
+end)
+
+--// Sound
+local TeleportSound = Instance.new("Sound")
+TeleportSound.SoundId = "rbxassetid://12222242" -- Replace with your teleport sound ID
+TeleportSound.Volume = 1
+TeleportSound.Parent = HumanoidRootPart
+
+--// State
+local running = false
+local cooldown = false
+local tpCooldown = false
+local ultimateCooldown = false
+
+--// Helper: Get map bounds (5 studs inset)
+local function getMapBounds()
+	local minX, minY, minZ = math.huge, math.huge, math.huge
+	local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+
+	for _, part in pairs(workspace:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local pos = part.Position
+			minX = math.min(minX, pos.X - part.Size.X/2)
+			maxX = math.max(maxX, pos.X + part.Size.X/2)
+			minY = math.min(minY, pos.Y - part.Size.Y/2)
+			maxY = math.max(maxY, pos.Y + part.Size.Y/2)
+			minZ = math.min(minZ, pos.Z - part.Size.Z/2)
+			maxZ = math.max(maxZ, pos.Z + part.Size.Z/2)
+		end
+	end
+	-- Inset by 5 studs to avoid void/out of bounds
+	return
+		minX + 5, maxX - 5,
+		minY + 5, maxY - 5,
+		minZ + 5, maxZ - 5
 end
-bindCharacter()
-player.CharacterAdded:Connect(bindCharacter)
 
--- UI
-local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-gui.ResetOnSpawn = false
+local minX, maxX, minY, maxY, minZ, maxZ = getMapBounds()
 
-local runBtn = Instance.new("TextButton", gui)
-runBtn.Size = UDim2.new(0, 150, 0, 40)
-runBtn.Position = UDim2.new(0, 10, 0, 10)
-runBtn.Text = "Toggle Run Away"
-runBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
-runBtn.TextColor3 = Color3.new(1, 1, 1)
+--// Teleport Away function (existing)
+local function teleportAway()
+	if cooldown or tpCooldown then return end
 
-local chaseBtn = Instance.new("TextButton", gui)
-chaseBtn.Size = UDim2.new(0, 150, 0, 40)
-chaseBtn.Position = UDim2.new(0, 10, 0, 60)
-chaseBtn.Text = "Toggle Chase"
-chaseBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-chaseBtn.TextColor3 = Color3.new(1, 1, 1)
+	local randomAngle = math.random() * 2 * math.pi
+	local radius = 75
+	local offset = Vector3.new(math.cos(randomAngle), 0, math.sin(randomAngle)) * radius
+	local newPos = HumanoidRootPart.Position + offset
 
--- Teleport FX
-local function playTeleportSound()
-	local sound = Instance.new("Sound", hrp)
-	sound.SoundId = TELEPORT_SOUND_ID
-	sound.Volume = 2
-	sound:Play()
-	Debris:AddItem(sound, 2)
+	-- Clamp to map bounds
+	newPos = Vector3.new(
+		math.clamp(newPos.X, minX, maxX),
+		math.clamp(newPos.Y, minY, maxY),
+		math.clamp(newPos.Z, minZ, maxZ)
+	)
+
+	-- Check for ground under position to avoid void
+	local ray = Ray.new(newPos + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0))
+	local part = workspace:FindPartOnRay(ray, Character)
+	if part and part:IsA("BasePart") then
+		tpCooldown = true
+		HumanoidRootPart.CFrame = CFrame.new(newPos)
+		TeleportSound:Play()
+		local originalSpeed = Humanoid.WalkSpeed
+		Humanoid.WalkSpeed = 45
+		task.delay(1.5, function()
+			Humanoid.WalkSpeed = originalSpeed
+			tpCooldown = false
+		end)
+	end
 end
 
-local function createTeleportParticles()
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Texture = TELEPORT_PARTICLE
-	emitter.Lifetime = NumberRange.new(1)
-	emitter.Rate = 200
-	emitter.Parent = hrp
-	Debris:AddItem(emitter, 1)
-end
+--// Function to find the furthest safe location within map bounds
+local function findFurthestSafeLocation()
+	local furthestPos = HumanoidRootPart.Position
+	local furthestDist = 0
 
--- Teleport to a safe direction
-local function getSafePosition()
-	local directions = {
-		Vector3.new(1,0,0),
-		Vector3.new(-1,0,0),
-		Vector3.new(0,0,1),
-		Vector3.new(0,0,-1),
-		Vector3.new(1,0,1).Unit,
-		Vector3.new(-1,0,1).Unit,
-		Vector3.new(1,0,-1).Unit,
-		Vector3.new(-1,0,-1).Unit,
-	}
-	local best = hrp.Position
-	local maxDist = 0
-	for _, dir in ipairs(directions) do
-		local pos = hrp.Position + dir * TELEPORT_DISTANCE
-		if math.abs(pos.X) <= MAP_BOUNDS and math.abs(pos.Z) <= MAP_BOUNDS and pos.Y > 0 then
-			local minDist = math.huge
-			for _, p in ipairs(Players:GetPlayers()) do
-				if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-					local d = (p.Character.HumanoidRootPart.Position - pos).Magnitude
-					if d < minDist then minDist = d end
-				end
-			end
-			if minDist > maxDist then
-				maxDist = minDist
-				best = pos
+	-- Sample points on a circle around current position (radius 75)
+	local radius = 75
+	for i = 0, 360, 10 do
+		local rad = math.rad(i)
+		local candidatePos = HumanoidRootPart.Position + Vector3.new(math.cos(rad), 0, math.sin(rad)) * radius
+
+		-- Clamp candidate within map bounds
+		candidatePos = Vector3.new(
+			math.clamp(candidatePos.X, minX, maxX),
+			math.clamp(candidatePos.Y, minY, maxY),
+			math.clamp(candidatePos.Z, minZ, maxZ)
+		)
+
+		-- Check ground under candidate
+		local ray = Ray.new(candidatePos + Vector3.new(0, 10, 0), Vector3.new(0, -50, 0))
+		local part = workspace:FindPartOnRay(ray, Character)
+		if part and part:IsA("BasePart") then
+			local dist = (candidatePos - HumanoidRootPart.Position).Magnitude
+			if dist > furthestDist then
+				furthestDist = dist
+				furthestPos = candidatePos
 			end
 		end
 	end
-	return best
+	return furthestPos
 end
 
-local function teleportAway()
-	if tick() - lastTeleport < TELEPORT_COOLDOWN then return end
-	lastTeleport = tick()
-	local dest = getSafePosition()
-	hrp.CFrame = CFrame.new(dest)
-	playTeleportSound()
-	createTeleportParticles()
-	humanoid.WalkSpeed = TELEPORT_SPEED_BOOST
-	task.delay(TELEPORT_BOOST_TIME, function()
-		if humanoid then
-			humanoid.WalkSpeed = BASE_SPEED
-		end
+--// Ultimate Form function
+local function ultimateForm()
+	if ultimateCooldown then return end
+	ultimateCooldown = true
+
+	for i = 1, 25 do
+		local targetPos = findFurthestSafeLocation()
+		HumanoidRootPart.CFrame = CFrame.new(targetPos)
+		TeleportSound:Play()
+		task.wait(0.2)
+	end
+
+	local originalSpeed = Humanoid.WalkSpeed
+	Humanoid.WalkSpeed = 46
+	task.delay(5.5, function()
+		Humanoid.WalkSpeed = originalSpeed
 	end)
 
-	local label = Instance.new("BillboardGui", hrp)
-	label.Size = UDim2.new(0, 200, 0, 50)
-	label.StudsOffset = Vector3.new(0, 3, 0)
-	label.AlwaysOnTop = true
-	local txt = Instance.new("TextLabel", label)
-	txt.Size = UDim2.new(1, 0, 1, 0)
-	txt.BackgroundTransparency = 1
-	txt.Text = "Can't Touch This"
-	txt.TextColor3 = Color3.new(1, 0, 0)
-	txt.TextScaled = true
-	Debris:AddItem(label, 5)
+	-- Cooldown timer
+	task.delay(10, function()
+		ultimateCooldown = false
+	end)
 end
 
--- Detect threats
-local function detectThreats()
-	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj:IsA("BasePart") or obj:IsA("Script") or obj:IsA("ModuleScript") then
-			local d = (obj.Position - hrp.Position).Magnitude
-			if d < DETECT_RADIUS then
-				teleportAway()
-				break
+--// Monitor threats (existing with auto-teleport)
+local function monitorThreats()
+	while running do
+		local closestPlayer, minDist = nil, math.huge
+		for _, p in pairs(Players:GetPlayers()) do
+			if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+				local dist = (p.Character.HumanoidRootPart.Position - HumanoidRootPart.Position).Magnitude
+
+				-- Auto ultimate form if player within 8.5 studs
+				if dist <= 8.5 then
+					ultimateForm()
+				elseif dist < 35 then
+					teleportAway()
+				end
+
+				if dist < minDist then
+					closestPlayer, minDist = p, dist
+				end
 			end
 		end
+
+		-- Check for damaging objects within 45 studs
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if obj:IsA("Script") or obj:IsA("Tool") or obj:IsA("Explosion") then
+				if (obj.Position - HumanoidRootPart.Position).Magnitude < 45 then
+					teleportAway()
+				end
+			end
+		end
+
+		wait(0.25)
 	end
 end
 
--- Get nearest player
-local function getNearestPlayer()
-	local nearest, dist = nil, math.huge
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-			local d = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
-			if d < dist then
-				nearest, dist = p, d
-			end
-		end
-	end
-	return nearest, dist
-end
-
--- Main loop
-RunService.RenderStepped:Connect(function()
-	if not hrp or not humanoid then return end
-	if runAwayEnabled then
-		detectThreats()
-		local near, dist = getNearestPlayer()
-		if near and dist < NEAR_PLAYER_RADIUS then
-			teleportAway()
-		else
-			if near then
-				local dir = (hrp.Position - near.Character.HumanoidRootPart.Position).Unit
-				local target = hrp.Position + dir * 10
-				humanoid:MoveTo(target)
-			end
-		end
-	elseif chaseEnabled then
-		local near, dist = getNearestPlayer()
-		if near then
-			humanoid:MoveTo(near.Character.HumanoidRootPart.Position)
-			if humanoid.WalkSpeed < 22 then
-				humanoid.WalkSpeed = 22
-			end
-		end
-	end
+--// Events
+RunAwayBtn.MouseButton1Click:Connect(function()
+	running = true
+	spawn(monitorThreats) -- spawn to not block thread
 end)
 
--- Button logic
-runBtn.MouseButton1Click:Connect(function()
-	runAwayEnabled = not runAwayEnabled
-	chaseEnabled = false
-	runBtn.Text = runAwayEnabled and "Running Away..." or "Toggle Run Away"
-	chaseBtn.Text = "Toggle Chase"
+StopBtn.MouseButton1Click:Connect(function()
+	running = false
 end)
 
-chaseBtn.MouseButton1Click:Connect(function()
-	chaseEnabled = not chaseEnabled
-	runAwayEnabled = false
-	chaseBtn.Text = chaseEnabled and "Chasing..." or "Toggle Chase"
-	runBtn.Text = "Toggle Run Away"
+UltimateBtn.MouseButton1Click:Connect(function()
+	ultimateForm()
+end)
+
+--// Auto-Respawn Listener
+LocalPlayer.CharacterAdded:Connect(function(char)
+	Character = char
+	HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
+	Humanoid = char:WaitForChild("Humanoid")
+	TeleportSound.Parent = HumanoidRootPart
 end)
