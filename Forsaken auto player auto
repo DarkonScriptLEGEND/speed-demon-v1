@@ -1,66 +1,108 @@
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+-- Forsaken AI Script v1 🌌
+local plr = game.Players.LocalPlayer
+local char = plr.Character or plr.CharacterAdded:Wait()
+local gui = Instance.new("ScreenGui", game.CoreGui)
+gui.Name = "ForsakenAIGui"
 
-local LocalPlayer = Players.LocalPlayer
-local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local hrp = character:WaitForChild("HumanoidRootPart")
-local humanoid = character:WaitForChild("Humanoid")
-
-local function isInForsaken()
-    -- You can check game.PlaceId or game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
-    -- Example Forsaken PlaceId (replace with real IDs):
-    local forsakenPlaceIds = {
-        123456789, -- Example Forsaken place id survivor
-        987654321, -- Example Forsaken place id killer
-    }
-    for _, id in pairs(forsakenPlaceIds) do
-        if game.PlaceId == id then
-            return true
-        end
+-- Cleanup Anti-Cheat 🧹
+for _, v in pairs(game:GetDescendants()) do
+    if v:IsA("Script") and v.Name:lower():match("cheat") then
+        v:Destroy()
     end
-    return false
 end
 
--- Simple helper to get nearest player excluding self
-local function getNearestPlayer()
-    local nearest = nil
-    local nearestDist = math.huge
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            local dist = (plr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
-            if dist < nearestDist then
-                nearestDist = dist
-                nearest = plr
+-- UI Buttons
+local function makeButton(text, pos, callback)
+    local btn = Instance.new("TextButton", gui)
+    btn.Size = UDim2.new(0, 180, 0, 30)
+    btn.Position = pos
+    btn.Text = text
+    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.MouseButton1Click:Connect(callback)
+end
+
+local autoMode = "None"
+local farming = false
+
+-- Movement AI
+local function humanLikeMove(toPos)
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    local hum = char:WaitForChild("Humanoid")
+    hum:MoveTo(toPos)
+end
+
+-- Auto Generator Logic 🔧
+local function autoRepairGenerators()
+    while autoMode == "Survivor" do
+        for _, g in pairs(workspace:GetDescendants()) do
+            if g.Name == "Generator" and g:FindFirstChild("RepairPart") then
+                local part = g.RepairPart
+                if (part.Position - char.HumanoidRootPart.Position).Magnitude < 25 then
+                    fireproximityprompt(part:FindFirstChildOfClass("ProximityPrompt"))
+                else
+                    humanLikeMove(part.Position + Vector3.new(0, 0, 2))
+                end
             end
         end
+        task.wait(2)
     end
-    return nearest, nearestDist
 end
 
-if isInForsaken() then
-    print("Forsaken detected! Starting Auto Play...")
-
-    -- Example Auto Survivor behavior: run away from nearest killer (simplified)
-    RunService.Heartbeat:Connect(function()
-        local nearest, dist = getNearestPlayer()
-        if nearest and nearest.Character and nearest.Character:FindFirstChild("HumanoidRootPart") then
-            local enemyPos = nearest.Character.HumanoidRootPart.Position
-            local myPos = hrp.Position
-
-            -- If enemy is too close, run away
-            if dist < 30 then
-                local direction = (myPos - enemyPos).Unit
-                local targetPos = myPos + direction * 20
-                -- Move towards targetPos using Humanoid:MoveTo()
-                humanoid:MoveTo(targetPos)
-            else
-                -- Idle or roam randomly
-                humanoid:MoveTo(myPos + Vector3.new(math.random(-10,10),0,math.random(-10,10)))
+-- Auto Killer Logic 🩸
+local function autoHuntSurvivors()
+    while autoMode == "Killer" do
+        for _, p in pairs(game.Players:GetPlayers()) do
+            if p ~= plr and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local dist = (p.Character.HumanoidRootPart.Position - char.HumanoidRootPart.Position).Magnitude
+                if dist < 100 then
+                    humanLikeMove(p.Character.HumanoidRootPart.Position)
+                end
             end
         end
-    end)
-
-    -- You could add a similar basic auto killer mode here
-else
-    print("Unsupported game. Auto play script disabled.")
+        task.wait(1)
+    end
 end
+
+-- Money Farm Logic 💰
+local function autoFarm()
+    while farming do
+        if autoMode == "Survivor" then
+            autoRepairGenerators()
+        elseif autoMode == "Killer" then
+            autoHuntSurvivors()
+        end
+        task.wait(5)
+    end
+end
+
+-- GUI Buttons
+makeButton("☀ Auto Survivor", UDim2.new(0, 10, 0, 10), function()
+    autoMode = "Survivor"
+    farming = true
+    autoRepairGenerators()
+end)
+
+makeButton("💀 Auto Killer", UDim2.new(0, 10, 0, 50), function()
+    autoMode = "Killer"
+    farming = true
+    autoHuntSurvivors()
+end)
+
+makeButton("🛑 Stop AI", UDim2.new(0, 10, 0, 90), function()
+    autoMode = "None"
+    farming = false
+end)
+
+makeButton("💸 Auto Money", UDim2.new(0, 10, 0, 130), function()
+    farming = true
+    autoFarm()
+end)
+
+makeButton("🧠 Disable Anti-Cheat", UDim2.new(0, 10, 0, 170), function()
+    for _, v in pairs(game:GetDescendants()) do
+        if v:IsA("Script") and v.Name:lower():match("cheat") then
+            v:Destroy()
+        end
+    end
+end)
