@@ -1,196 +1,214 @@
 --// Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
+local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+local function getCharacter(plr)
+	return plr.Character or plr.CharacterAdded:Wait()
+end
+
+local function getHRP(plr)
+	return getCharacter(plr):WaitForChild("HumanoidRootPart", 5)
+end
+
+local function safeCFrame(pos)
+	local size = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
+	if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z then
+		return false
+	end
+	local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
+	local parts = Workspace:FindPartsInRegion3(region, nil, 5)
+	for _, p in pairs(parts) do
+		if p.CanCollide and p.Transparency < 0.95 then return true end
+	end
+	return false
+end
+
+local function getFurthest()
+	local root = getHRP(LocalPlayer)
+	local best = root.Position
+	local maxDist = 0
+	for _, part in pairs(Workspace:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local pos = part.Position + Vector3.new(0, 5, 0)
+			if safeCFrame(pos) then
+				local dist = (pos - root.Position).Magnitude
+				if dist > maxDist then
+					maxDist = dist
+					best = pos
+				end
+			end
+		end
+	end
+	return best
+end
+
+--// GUI Setup
+local gui = Instance.new("ScreenGui", game.CoreGui)
+gui.Name = "BehindYaUI"
+
+local toggleBtn = Instance.new("TextButton", gui)
+toggleBtn.Size = UDim2.new(0, 150, 0, 35)
+toggleBtn.Position = UDim2.new(0, 10, 0, 10)
+toggleBtn.Text = "Behind Ya: OFF"
+toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+
+local viewBtn = Instance.new("TextButton", gui)
+viewBtn.Size = UDim2.new(0, 130, 0, 30)
+viewBtn.Position = UDim2.new(0, 10, 0, 50)
+viewBtn.Text = "👁 View Player"
+viewBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+viewBtn.TextColor3 = Color3.new(1, 1, 1)
+
+local unviewBtn = Instance.new("TextButton", gui)
+unviewBtn.Size = UDim2.new(0, 130, 0, 30)
+unviewBtn.Position = UDim2.new(0, 10, 0, 85)
+unviewBtn.Text = "🔙 Unview Self"
+unviewBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+unviewBtn.TextColor3 = Color3.new(1, 1, 1)
+
+local statusText = Instance.new("TextLabel", gui)
+statusText.Size = UDim2.new(1, 0, 0, 30)
+statusText.Position = UDim2.new(0, 0, 1, -30)
+statusText.BackgroundTransparency = 1
+statusText.TextColor3 = Color3.fromRGB(0, 255, 0)
+statusText.TextScaled = true
+statusText.Visible = false
+
+local cooldownLabel = Instance.new("TextLabel", gui)
+cooldownLabel.Size = UDim2.new(0, 160, 0, 25)
+cooldownLabel.Position = UDim2.new(0, 10, 0, 120)
+cooldownLabel.BackgroundTransparency = 1
+cooldownLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+cooldownLabel.TextScaled = true
+cooldownLabel.Text = ""
+cooldownLabel.Parent = gui
+
+--// Sounds
+local teleportSound = Instance.new("Sound", game:GetService("SoundService"))
+teleportSound.SoundId = "rbxassetid://12222242"
+teleportSound.Volume = 1
+
+local bypassSound = Instance.new("Sound", game:GetService("SoundService"))
+bypassSound.SoundId = "rbxassetid://9120454324"
+bypassSound.Volume = 1
 
 --// Variables
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Camera = workspace.CurrentCamera
-local SpawnTime = tick()
-local CanSelfDestruct = false
-local RespawnCooldown = 30
-local LastTeleportTime = 0
+local running = false
+local cooldown = false
+local lastSafePos = getHRP(LocalPlayer).Position
 
---// Functions
-local function getCharacter()
-    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+--// Helper Functions
+local function showFloatingText(txt, color)
+	local gui = Instance.new("BillboardGui", getHRP(LocalPlayer))
+	gui.Size = UDim2.new(0, 200, 0, 50)
+	gui.StudsOffset = Vector3.new(0, 3, 0)
+	gui.AlwaysOnTop = true
+
+	local lbl = Instance.new("TextLabel", gui)
+	lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = txt
+	lbl.TextColor3 = color
+	lbl.TextScaled = true
+
+	task.delay(1, function() gui:Destroy() end)
 end
 
-local function isSafePosition(pos)
-    local rayOrigin = pos + Vector3.new(0, 10, 0)
-    local rayDir = Vector3.new(0, -100, 0)
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {getCharacter()}
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-
-    local result = workspace:Raycast(rayOrigin, rayDir, rayParams)
-    return result and result.Instance and result.Instance:IsA("BasePart")
+local function teleportSafely(pos)
+	local root = getHRP(LocalPlayer)
+	lastSafePos = root.Position
+	root.CFrame = CFrame.new(pos)
+	teleportSound:Play()
 end
 
-local function playSound(id, parent)
-    local s = Instance.new("Sound", parent)
-    s.SoundId = "rbxassetid://"..id
-    s.Volume = 1
-    s:Play()
-    Debris:AddItem(s, 3)
+local function handleStuckCheck()
+	task.delay(0.1, function()
+		local root = getHRP(LocalPlayer)
+		if root.Position.Y < 3 then
+			root.CFrame = CFrame.new(lastSafePos)
+			bypassSound:Play()
+			statusText.Text = "✅ Successfully bypassed anti cheat"
+			statusText.Visible = true
+			task.delay(3, function() statusText.Visible = false end)
+			cooldown = true
+			running = false
+			toggleBtn.Text = "Behind Ya: OFF"
+			toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
+			task.delay(2.3, function() cooldown = false end)
+		end
+	end)
 end
 
-local function showTextAbove(char, text, color, duration)
-    local gui = Instance.new("BillboardGui")
-    gui.Size = UDim2.new(0, 200, 0, 50)
-    gui.Adornee = char:FindFirstChild("HumanoidRootPart")
-    gui.StudsOffset = Vector3.new(0, 3, 0)
-    gui.AlwaysOnTop = true
-    gui.Parent = char
-
-    local label = Instance.new("TextLabel", gui)
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.TextColor3 = color
-    label.TextScaled = true
-    label.Font = Enum.Font.GothamBold
-
-    task.delay(duration, function() gui:Destroy() end)
-end
-
-local function getFurthestSafePosition()
-    local char = getCharacter()
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local maxDist = 0
-    local bestPos = hrp.Position
-
-    for x = -150, 150, 15 do
-        for z = -150, 150, 15 do
-            local testPos = hrp.Position + Vector3.new(x, 0, z)
-            local dist = (testPos - hrp.Position).Magnitude
-            if dist > maxDist and isSafePosition(testPos) then
-                maxDist = dist
-                bestPos = testPos
-            end
-        end
-    end
-    return bestPos
-end
-
-local function teleportTo(pos)
-    local hrp = getCharacter():FindFirstChild("HumanoidRootPart")
-    if hrp and isSafePosition(pos) then
-        hrp.CFrame = CFrame.new(pos)
-    end
-end
-
-local function teleportBehindPlayer(target)
-    local now = tick()
-    if now - LastTeleportTime < 2.3 then return end
-    LastTeleportTime = now
-
-    local targetHRP = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-    if not targetHRP then return end
-
-    local backVec = -targetHRP.CFrame.LookVector.Unit * 45
-    local behindPos = targetHRP.Position + backVec
-
-    local char = getCharacter()
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-
-    if isSafePosition(behindPos) then
-        teleportTo(behindPos)
-    else
-        teleportTo(getFurthestSafePosition())
-    end
-
-    playSound("12222242", hrp) -- poof sound
-    showTextAbove(char, "Poof", Color3.new(1, 1, 1), 1)
-end
-
-local function startSelfDestruct()
-    if not CanSelfDestruct then return end
-    CanSelfDestruct = false -- prevent overlapping
-
-    local char = getCharacter()
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local originalPos = hrp.Position
-
-    showTextAbove(char, "Self Destruct", Color3.new(1, 0, 0), 5)
-
-    local endTime = tick() + 5
-    while tick() < endTime do
-        teleportTo(getFurthestSafePosition())
-        task.wait(0.1)
-    end
-
-    -- Teleport back to original position
-    teleportTo(originalPos)
-end
-
---// UI
-local gui = Instance.new("ScreenGui", game.CoreGui)
-gui.Name = "BehindYaGui"
-gui.ResetOnSpawn = false
-
-local button = Instance.new("TextButton", gui)
-button.Size = UDim2.new(0, 160, 0, 40)
-button.Position = UDim2.new(0, 10, 0, 10)
-button.Text = "Behind Ya (OFF)"
-button.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
-button.TextColor3 = Color3.new(1, 1, 1)
-button.Font = Enum.Font.GothamBold
-button.TextSize = 16
-
-local enabled = false
-
-button.MouseButton1Click:Connect(function()
-    enabled = not enabled
-    button.Text = "Behind Ya ("..(enabled and "ON" or "OFF")..")"
-    button.BackgroundColor3 = enabled and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
-end)
-
---// Respawn tracker
-LocalPlayer.CharacterAdded:Connect(function()
-    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-    SpawnTime = tick()
-    CanSelfDestruct = false
-    task.delay(RespawnCooldown, function()
-        CanSelfDestruct = true
-    end)
-end)
-
---// Start cooldown on join
-task.delay(RespawnCooldown, function()
-    CanSelfDestruct = true
-end)
-
---// Main logic
+--// Core Logic
 RunService.Heartbeat:Connect(function()
-    if not enabled then return end
+	if not running or cooldown then return end
 
-    local char = getCharacter()
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+	local myHRP = getHRP(LocalPlayer)
+	local nearest, dist = nil, math.huge
 
-    local nearest, dist = nil, math.huge
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            local d = (plr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
-            if d < dist then
-                dist = d
-                nearest = plr
-            end
-        end
-    end
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local d = (plr.Character.HumanoidRootPart.Position - myHRP.Position).Magnitude
+			if d < dist and d <= 85 then
+				dist = d
+				nearest = plr
+			end
+		end
+	end
 
-    if nearest and dist < 85 then
-        teleportBehindPlayer(nearest)
-        task.wait(0.1)
-        local newDist = (nearest.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
-        if newDist < 10 and CanSelfDestruct then
-            startSelfDestruct()
-        end
-    end
+	if nearest then
+		local tHRP = getHRP(nearest)
+		local backPos = tHRP.Position - tHRP.CFrame.LookVector * 45
+		if safeCFrame(backPos) then
+			teleportSafely(backPos)
+		else
+			teleportSafely(getFurthest())
+		end
+		showFloatingText("💨 Poof", Color3.new(1, 1, 1))
+		handleStuckCheck()
+		cooldown = true
+		local t = 2.3
+		while t > 0 do
+			cooldownLabel.Text = "⏳ Cooldown: " .. string.format("%.1f", t)
+			t -= 0.1
+			task.wait(0.1)
+		end
+		cooldownLabel.Text = ""
+		cooldown = false
+	end
+end)
+
+--// Toggle button
+toggleBtn.MouseButton1Click:Connect(function()
+	running = not running
+	toggleBtn.Text = "Behind Ya: " .. (running and "ON" or "OFF")
+	toggleBtn.BackgroundColor3 = running and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
+end)
+
+--// View buttons
+viewBtn.MouseButton1Click:Connect(function()
+	local list = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			table.insert(list, p)
+		end
+	end
+	if #list > 0 then
+		local random = list[math.random(1, #list)]
+		Camera.CameraSubject = getHRP(random)
+	end
+end)
+
+unviewBtn.MouseButton1Click:Connect(function()
+	Camera.CameraSubject = getCharacter(LocalPlayer):FindFirstChild("Humanoid")
+end)
+
+-- Respawn handling
+LocalPlayer.CharacterAdded:Connect(function(char)
+	char:WaitForChild("HumanoidRootPart")
+	lastSafePos = char.HumanoidRootPart.Position
 end)
