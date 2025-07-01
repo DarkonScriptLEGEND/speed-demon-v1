@@ -1,414 +1,156 @@
--- Services
+-- Speed Demon V1 (Updated July 2025)
+if getgenv().SpeedDemonLoaded then return end
+getgenv().SpeedDemonLoaded = true
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local Root = Character:WaitForChild("HumanoidRootPart")
 
-local player = Players.LocalPlayer
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 
--- Settings
-local BASE_SPEED = 16
-local RUNAWAY_RADIUS = 35
-local SPEED_BOOST = 45
-local BOOST_DURATION = 1.5
-local CHASE_SPEED = 22
-local TELEPORT_COOLDOWN = 0.95 -- currently not used because no teleport for run away
+-- GUI Setup
+local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
+ScreenGui.Name = "SpeedDemonUI"
+ScreenGui.ResetOnSpawn = false
 
--- State variables
-local runAwayEnabled = false
-local chaseEnabled = false
-local targetPlayer = nil
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(0, 140, 0, 30)
+toggleButton.Position = UDim2.new(0.5, -70, 0.5, -15)
+toggleButton.Text = "Speed Demon V1"
+toggleButton.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.BorderSizePixel = 0
+toggleButton.Draggable = true
+toggleButton.Active = true
+toggleButton.Parent = ScreenGui
 
-local char, hrp, humanoid
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 300, 0, 160)
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, 40)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+MainFrame.Visible = false
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
 
--- Wait for character and humanoid
-local function setupCharacter()
-    char = player.Character or player.CharacterAdded:Wait()
-    hrp = char:WaitForChild("HumanoidRootPart")
-    humanoid = char:WaitForChild("Humanoid")
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Padding = UDim.new(0, 6)
+UIListLayout.Parent = MainFrame
+
+local function createButton(text, callback)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, -20, 0, 30)
+	button.Position = UDim2.new(0, 10, 0, 0)
+	button.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.Text = text
+	button.Font = Enum.Font.Gotham
+	button.TextSize = 14
+	button.BorderSizePixel = 0
+	button.Parent = MainFrame
+	button.MouseButton1Click:Connect(callback)
+	local corner = Instance.new("UICorner", button)
+	corner.CornerRadius = UDim.new(0, 6)
+	return button
 end
 
-setupCharacter()
-
-player.CharacterAdded:Connect(function()
-    setupCharacter()
+-- Toggle GUI
+toggleButton.MouseButton1Click:Connect(function()
+	MainFrame.Visible = not MainFrame.Visible
 end)
 
--- GUI Setup --
+-- Variables
+local runAwayActive = false
+local lastTeleportTime = 0
+local teleportCooldown = 0.95
+local safeDistance = 75
+local originalSpeed = Humanoid.WalkSpeed
+local isTeleporting = false
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "SpeedDemonGUI"
-gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
-
--- Mini Icon (center screen)
-local icon = Instance.new("TextButton")
-icon.Size = UDim2.new(0, 170, 0, 45)
-icon.Position = UDim2.new(0.5, -85, 0.5, -22)
-icon.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
-icon.AutoButtonColor = false
-icon.Text = "Speed Demon V1"
-icon.TextColor3 = Color3.fromRGB(170, 255, 255)
-icon.Font = Enum.Font.GothamBold
-icon.TextSize = 21
-icon.ZIndex = 10
-icon.Parent = gui
-
-local iconCorners = Instance.new("UICorner", icon)
-iconCorners.CornerRadius = UDim.new(0, 10)
-
-local iconGradient = Instance.new("UIGradient", icon)
-iconGradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 255, 255)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 170, 170))
-}
-iconGradient.Rotation = 90
-
--- Dragging variables for icon
-local draggingIcon = false
-local dragStartPosIcon
-local mouseStartPosIcon
-
-icon.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        draggingIcon = true
-        dragStartPosIcon = icon.Position
-        mouseStartPosIcon = input.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                draggingIcon = false
-            end
-        end)
-    end
+-- Toggle Run Away
+createButton("Toggle Run Away", function()
+	runAwayActive = not runAwayActive
 end)
 
-icon.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement and draggingIcon then
-        local delta = input.Position - mouseStartPosIcon
-        icon.Position = UDim2.new(
-            dragStartPosIcon.X.Scale,
-            dragStartPosIcon.X.Offset + delta.X,
-            dragStartPosIcon.Y.Scale,
-            dragStartPosIcon.Y.Offset + delta.Y
-        )
-    end
-end)
-
--- Main frame styling function
-local function createStyledFrame(parent, size, position)
-    local frame = Instance.new("Frame", parent)
-    frame.Size = size
-    frame.Position = position
-    frame.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
-    frame.BorderSizePixel = 0
-    frame.ClipsDescendants = true
-
-    local corners = Instance.new("UICorner", frame)
-    corners.CornerRadius = UDim.new(0, 10)
-
-    local gradient = Instance.new("UIGradient", frame)
-    gradient.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(50, 50, 50)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 15, 15)),
-    }
-    gradient.Rotation = 90
-
-    return frame
+-- Teleport Logic
+local function isDamage(obj)
+	if not obj:IsA("BasePart") then return false end
+	local scripts = obj:GetDescendants()
+	for _, s in pairs(scripts) do
+		if s:IsA("Script") or s:IsA("LocalScript") then
+			return true
+		end
+	end
+	return false
 end
 
--- Main GUI frame
-local frame = createStyledFrame(gui, UDim2.new(0, 280, 0, 200), UDim2.new(0.5, -140, 0.5, -100))
-frame.Visible = false
-frame.ZIndex = 9
-
--- Title label
-local title = Instance.new("TextLabel", frame)
-title.Size = UDim2.new(1, -50, 0, 40)
-title.Position = UDim2.new(0, 20, 0, 10)
-title.BackgroundTransparency = 1
-title.Text = "Speed Demon V1"
-title.Font = Enum.Font.GothamBold
-title.TextSize = 28
-title.TextColor3 = Color3.fromRGB(120, 230, 255)
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.ZIndex = 11
-
--- Close button
-local closeBtn = Instance.new("TextButton", frame)
-closeBtn.Size = UDim2.new(0, 28, 0, 28)
-closeBtn.Position = UDim2.new(1, -38, 0, 10)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 24
-closeBtn.Text = "✕"
-closeBtn.ZIndex = 12
-closeBtn.AutoButtonColor = true
-
-local closeCorners = Instance.new("UICorner", closeBtn)
-closeCorners.CornerRadius = UDim.new(0, 8)
-
-closeBtn.MouseEnter:Connect(function()
-    closeBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
-end)
-closeBtn.MouseLeave:Connect(function()
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-end)
-
-closeBtn.MouseButton1Click:Connect(function()
-    frame.Visible = false
-end)
-
--- Drag logic for main frame
-local draggingFrame = false
-local dragStartPosF
-local mouseStartPosF
-
-frame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        draggingFrame = true
-        dragStartPosF = frame.Position
-        mouseStartPosF = input.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                draggingFrame = false
-            end
-        end)
-    end
-end)
-
-frame.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement and draggingFrame then
-        local delta = input.Position - mouseStartPosF
-        frame.Position = UDim2.new(
-            dragStartPosF.X.Scale,
-            dragStartPosF.X.Offset + delta.X,
-            dragStartPosF.Y.Scale,
-            dragStartPosF.Y.Offset + delta.Y
-        )
-    end
-end)
-
--- Buttons creation helper
-local function createButton(text, posY, parent)
-    local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(0, 240, 0, 45)
-    btn.Position = UDim2.new(0, 20, 0, posY)
-    btn.BackgroundColor3 = Color3.fromRGB(25, 120, 180)
-    btn.TextColor3 = Color3.fromRGB(240, 240, 240)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 20
-    btn.Text = text
-    btn.AutoButtonColor = false
-    btn.ZIndex = 11
-
-    local corner = Instance.new("UICorner", btn)
-    corner.CornerRadius = UDim.new(0, 12)
-
-    local grad = Instance.new("UIGradient", btn)
-    grad.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(70, 190, 255)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 80, 140)),
-    }
-    grad.Rotation = 90
-
-    btn.MouseEnter:Connect(function()
-        btn.BackgroundColor3 = Color3.fromRGB(100, 210, 255)
-    end)
-    btn.MouseLeave:Connect(function()
-        btn.BackgroundColor3 = Color3.fromRGB(25, 120, 180)
-    end)
-
-    return btn
+local function getFurthestSafePosition()
+	local regionSize = 100
+	local bestPos = nil
+	local maxDist = 0
+	for x = -regionSize, regionSize, 10 do
+		for z = -regionSize, regionSize, 10 do
+			local pos = Root.Position + Vector3.new(x, 0, z)
+			local ray = Ray.new(pos + Vector3.new(0, 10, 0), Vector3.new(0, -100, 0))
+			local hit, point = workspace:FindPartOnRay(ray, Character)
+			if hit and hit:IsA("BasePart") and (Root.Position - pos).Magnitude > maxDist then
+				bestPos = point + Vector3.new(0, 3, 0)
+				maxDist = (Root.Position - pos).Magnitude
+			end
+		end
+	end
+	return bestPos
 end
 
--- Run Away toggle button
-local runBtn = createButton("Toggle Run Away", 60, frame)
-
--- Chase Player toggle button
-local chaseBtn = createButton("Toggle Chase Player", 120, frame)
-
--- Show/hide GUI on icon click
-icon.MouseButton1Click:Connect(function()
-    frame.Visible = not frame.Visible
-end)
-
--- Run Away Logic --
-
-local function getNearestPlayer(radius)
-    local nearest = nil
-    local nearestDist = radius + 1
-
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= player and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 then
-            local dist = (plr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
-            if dist < nearestDist then
-                nearestDist = dist
-                nearest = plr
-            end
-        end
-    end
-    return nearest, nearestDist
+local function teleportTo(pos)
+	if not pos then return end
+	if isTeleporting then return end
+	isTeleporting = true
+	local currentTime = tick()
+	if currentTime - lastTeleportTime < teleportCooldown then return end
+	lastTeleportTime = currentTime
+	Root.CFrame = CFrame.new(pos)
+	Humanoid.WalkSpeed = 45
+	task.delay(1.5, function()
+		Humanoid.WalkSpeed = originalSpeed
+	end)
+	task.delay(0.1, function()
+		isTeleporting = false
+	end)
 end
 
-local runAwayCooldown = false
-
-local function speedBoost()
-    if humanoid then
-        humanoid.WalkSpeed = SPEED_BOOST
-        wait(BOOST_DURATION)
-        if humanoid then
-            humanoid.WalkSpeed = BASE_SPEED
-        end
-    end
-end
-
--- Move character away from player slowly
-local function moveAwayFromPlayer(plr)
-    if not plr.Character or not plr.Character:FindFirstChild("HumanoidRootPart") or not humanoid then return end
-
-    local direction = (hrp.Position - plr.Character.HumanoidRootPart.Position).Unit
-    local moveVector = direction * 16 -- move 16 studs per update away
-
-    local newPos = hrp.Position + moveVector
-    -- Basic check: don't move below Y=1 (avoid void), or too high
-    if newPos.Y < 1 then newPos = Vector3.new(newPos.X, 1, newPos.Z) end
-
-    -- Smoothly move humanoid root part (using MoveTo)
-    humanoid:MoveTo(newPos)
-end
-
--- Chase player logic
-local function chasePlayer(plr)
-    if plr and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and humanoid then
-        humanoid.WalkSpeed = CHASE_SPEED
-        humanoid:MoveTo(plr.Character.HumanoidRootPart.Position)
-    end
-end
-
--- Main loop to check auto runaway and chasing
+-- Auto Run Loop
 RunService.Heartbeat:Connect(function()
-    if not char or not hrp or not humanoid then return end
+	if not runAwayActive then return end
+	if not Character or not Root or not Humanoid then return end
 
-    if chaseEnabled and targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") and targetPlayer.Character.Humanoid.Health > 0 then
-        chasePlayer(targetPlayer)
-    elseif runAwayEnabled then
-        local nearest, dist = getNearestPlayer(RUNAWAY_RADIUS)
-        if nearest and dist <= RUNAWAY_RADIUS then
-            if not runAwayCooldown then
-                runAwayCooldown = true
-                -- Speed boost when near player
-                coroutine.wrap(speedBoost)()
+	-- Run away from nearby players
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local dist = (player.Character.HumanoidRootPart.Position - Root.Position).Magnitude
+			if dist < 35 then
+				local awayVec = (Root.Position - player.Character.HumanoidRootPart.Position).Unit * safeDistance
+				local newPos = Root.Position + awayVec
+				teleportTo(newPos)
+			end
+		end
+	end
 
-                -- Move away
-                moveAwayFromPlayer(nearest)
-
-                -- Cooldown timer
-                task.delay(TELEPORT_COOLDOWN, function()
-                    runAwayCooldown = false
-                end)
-            end
-        else
-            -- Reset WalkSpeed to normal if no threat
-            if humanoid.WalkSpeed ~= BASE_SPEED then
-                humanoid.WalkSpeed = BASE_SPEED
-            end
-        end
-    else
-        -- Neither chase nor runaway enabled: normal speed
-        if humanoid.WalkSpeed ~= BASE_SPEED then
-            humanoid.WalkSpeed = BASE_SPEED
-        end
-    end
+	-- Teleport from damage objects
+	for _, obj in pairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and (Root.Position - obj.Position).Magnitude < 45 then
+			if isDamage(obj) then
+				local safePos = getFurthestSafePosition()
+				teleportTo(safePos)
+				break
+			end
+		end
+	end
 end)
-
--- Button logic
-runBtn.MouseButton1Click:Connect(function()
-    runAwayEnabled = not runAwayEnabled
-    if runAwayEnabled then
-        runBtn.Text = "Run Away: ON"
-        chaseEnabled = false
-        chaseBtn.Text = "Toggle Chase Player"
-    else
-        runBtn.Text = "Run Away: OFF"
-    end
-end)
-
-chaseBtn.MouseButton1Click:Connect(function()
-    chaseEnabled = not chaseEnabled
-    if chaseEnabled then
-        chaseBtn.Text = "Chase Player: ON"
-        runAwayEnabled = false
-        runBtn.Text = "Toggle Run Away"
-        -- Ask user for target player name (simple prompt)
-        local targetName = game:GetService("StarterGui"):SetCore("PromptInput", "Enter player name to chase:")
-        if targetName then
-            targetPlayer = Players:FindFirstChild(targetName)
-            if not targetPlayer then
-                targetPlayer = nil
-                chaseEnabled = false
-                chaseBtn.Text = "Toggle Chase Player"
-            end
-        else
-            targetPlayer = nil
-            chaseEnabled = false
-            chaseBtn.Text = "Toggle Chase Player"
-        end
-    else
-        chaseBtn.Text = "Chase Player: OFF"
-        targetPlayer = nil
-    end
-end)
-
--- Save & load GUI position + toggles on reset
-local HttpService = game:GetService("HttpService")
-local dataKey = "SpeedDemonGUIData_"..player.UserId
-
-local function saveData()
-    local data = {
-        iconPos = {X=icon.Position.X.Offset, Y=icon.Position.Y.Offset},
-        framePos = {X=frame.Position.X.Offset, Y=frame.Position.Y.Offset},
-        runAway = runAwayEnabled,
-        chase = chaseEnabled
-    }
-    local success, err = pcall(function()
-        player:SetAttribute(dataKey, HttpService:JSONEncode(data))
-    end)
-    if not success then warn("Save failed:", err) end
-end
-
-local function loadData()
-    local saved = player:GetAttribute(dataKey)
-    if saved then
-        local success, data = pcall(function()
-            return HttpService:JSONDecode(saved)
-        end)
-        if success and data then
-            icon.Position = UDim2.new(0, data.iconPos.X, 0, data.iconPos.Y)
-            frame.Position = UDim2.new(0, data.framePos.X, 0, data.framePos.Y)
-            runAwayEnabled = data.runAway or false
-            chaseEnabled = data.chase or false
-
-            runBtn.Text = runAwayEnabled and "Run Away: ON" or "Toggle Run Away"
-            chaseBtn.Text = chaseEnabled and "Chase Player: ON" or "Toggle Chase Player"
-        end
-    end
-end
-
--- Save GUI position on drag end
-icon.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        saveData()
-    end
-end)
-
-frame.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        saveData()
-    end
-end)
-
--- Initial load
-loadData()
-
--- Open GUI on start for convenience
-frame.Visible = true
