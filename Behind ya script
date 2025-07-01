@@ -1,34 +1,112 @@
 --// Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local Debris = game:GetService("Debris")
-local SoundService = game:GetService("SoundService")
+
 local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
 
 --// Variables
-local active = false
-local viewing = nil
-local cooldown = false
-local circleLoopEnabled = false
-local selfDestructEnabled = false
+local behindYaActive = false
+local selfDestructActive = false
+local circleLoopActive = false
+local cooldownSelfDestruct = false
+local cooldownTeleport = false
+local currentViewIndex = 0
+local viewingPlayers = {}
 
---// Sound Setup
-local function playSound(id, volume)
-	local sound = Instance.new("Sound", SoundService)
-	sound.SoundId = "rbxassetid://" .. id
-	sound.Volume = volume or 1
-	sound:Play()
-	Debris:AddItem(sound, 5)
+--// Sounds
+local teleportSound = Instance.new("Sound", Workspace)
+teleportSound.SoundId = "rbxassetid://9118823102" -- teleport sound
+teleportSound.Volume = 1.5
+
+local bypassSound = Instance.new("Sound", Workspace)
+bypassSound.SoundId = "rbxassetid://7489482123" -- bypass anti cheat sound
+bypassSound.Volume = 1.5
+
+local selfDestructSound = Instance.new("Sound", Workspace)
+selfDestructSound.SoundId = "rbxassetid://9118823820" -- explosion sound
+selfDestructSound.Volume = 1.7
+
+--// Helper Functions
+
+local function getCharacter(plr)
+	return plr.Character or plr.CharacterAdded:Wait()
 end
 
---// Floating Text
-local function floatText(text, color, duration)
-	local billboard = Instance.new("BillboardGui", LocalPlayer.Character)
+local function getHRP(plr)
+	local char = getCharacter(plr)
+	return char:WaitForChild("HumanoidRootPart", 5)
+end
+
+local function getHumanoid(plr)
+	local char = getCharacter(plr)
+	return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function isPositionSafe(pos)
+	-- Checks if pos is inside map bounds and not inside wall (rough)
+	local mapSize = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
+	if math.abs(pos.X) > mapSize.X or math.abs(pos.Z) > mapSize.Z then
+		return false
+	end
+	
+	local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
+	local parts = Workspace:FindPartsInRegion3WithIgnoreList(region, {getCharacter(LocalPlayer)}, 10)
+	for _, p in pairs(parts) do
+		if p.CanCollide and p.Transparency < 0.95 then
+			return false
+		end
+	end
+	return true
+end
+
+local function getFurthestSafePosition()
+	local hrp = getHRP(LocalPlayer)
+	local bestPos = hrp.Position
+	local maxDist = 0
+	for _, part in pairs(Workspace:GetDescendants()) do
+		if part:IsA("BasePart") and part.CanCollide then
+			local pos = part.Position + Vector3.new(0, 5, 0)
+			if isPositionSafe(pos) then
+				local dist = (pos - hrp.Position).Magnitude
+				if dist > maxDist then
+					maxDist = dist
+					bestPos = pos
+				end
+			end
+		end
+	end
+	return bestPos
+end
+
+local function teleportTo(pos)
+	local hrp = getHRP(LocalPlayer)
+	if not hrp then return end
+
+	-- Play teleport sound & particles
+	teleportSound:Play()
+	
+	-- Particle effect
+	local p = Instance.new("ParticleEmitter")
+	p.Texture = "rbxassetid://243660364" -- sparkles
+	p.Lifetime = NumberRange.new(0.3)
+	p.Rate = 50
+	p.Speed = NumberRange.new(2,4)
+	p.Parent = hrp
+	Debris:AddItem(p, 0.5)
+
+	hrp.CFrame = CFrame.new(pos)
+end
+
+local function showFloatingText(text, color, duration)
+	local billboard = Instance.new("BillboardGui")
 	billboard.Size = UDim2.new(0, 200, 0, 50)
-	billboard.StudsOffset = Vector3.new(0, 4, 0)
+	billboard.Adornee = getHRP(LocalPlayer)
+	billboard.StudsOffset = Vector3.new(0, 3, 0)
 	billboard.AlwaysOnTop = true
-	billboard.Adornee = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 
 	local label = Instance.new("TextLabel", billboard)
 	label.Size = UDim2.new(1, 0, 1, 0)
@@ -36,133 +114,289 @@ local function floatText(text, color, duration)
 	label.Text = text
 	label.TextColor3 = color
 	label.TextScaled = true
+	label.Font = Enum.Font.GothamBold
 
+	billboard.Parent = Camera
 	Debris:AddItem(billboard, duration)
 end
 
---// Particles
-local function spawnParticles(part)
-	local emitter = Instance.new("ParticleEmitter", part)
-	emitter.Speed = NumberRange.new(0, 0)
-	emitter.Rate = 50
-	emitter.Lifetime = NumberRange.new(0.5)
-	emitter.Size = NumberSequence.new(1)
-	emitter.Color = ColorSequence.new(Color3.new(1, 1, 0))
-	Debris:AddItem(emitter, 1)
-end
-
---// Get Nearest Player
-local function getNearest(radius)
-	local nearest, dist = nil, radius
-	for _, plr in pairs(Players:GetPlayers()) do
-		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-			local mag = (plr.Character.HumanoidRootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
-			if mag < dist then
-				nearest, dist = plr, mag
-			end
-		end
+local function playTeleportAnimation()
+	local humanoid = getHumanoid(LocalPlayer)
+	if humanoid then
+		local anim = Instance.new("Animation")
+		anim.AnimationId = "rbxassetid://9133762206" -- teleport anim
+		local track = humanoid:LoadAnimation(anim)
+		track:Play()
+		Debris:AddItem(track, 3)
 	end
-	return nearest
-end
-
---// Teleport Logic
-local function teleportTo(pos)
-	local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-	if not root then return end
-	playSound("9118823102", 2)
-	spawnParticles(root)
-	root.CFrame = CFrame.new(pos)
-end
-
---// Circle Loop
-local function startCircleLoop()
-	if cooldown then return end
-	cooldown = true
-	local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-	local angle = 0
-	for _ = 1, 5 do
-		angle += math.pi / 6
-		local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * 60
-		teleportTo(root.Position + offset)
-		task.wait(0.3)
-	end
-	floatText("Circle Loop!", Color3.fromRGB(255, 255, 0), 2)
-	task.wait(5)
-	cooldown = false
-end
-
---// Self Destruct
-local function startSelfDestruct()
-	if cooldown then return end
-	cooldown = true
-	floatText("Self Destruct!", Color3.fromRGB(255, 0, 0), 2)
-	for _ = 1, 12 do
-		teleportTo(LocalPlayer.Character.HumanoidRootPart.Position + Vector3.new(0, 30, 0))
-		playSound("7489482123", 1)
-		task.wait(0.2)
-	end
-	cooldown = false
 end
 
 --// GUI Setup
+
 local gui = Instance.new("ScreenGui", game.CoreGui)
-gui.Name = "BehindYaMini"
-gui.ResetOnSpawn = false
+gui.Name = "BehindYaGui"
 
-local toggleBtn = Instance.new("TextButton", gui)
-toggleBtn.Size = UDim2.new(0, 180, 0, 30)
-toggleBtn.Position = UDim2.new(0, 10, 0, 10)
-toggleBtn.Text = "Behind Ya: OFF"
-toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
-toggleBtn.MouseButton1Click:Connect(function()
-	active = not active
-	toggleBtn.Text = active and "Behind Ya: ON" or "Behind Ya: OFF"
-	toggleBtn.BackgroundColor3 = active and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
-end)
+local mainFrame = Instance.new("Frame", gui)
+mainFrame.Size = UDim2.new(0, 180, 0, 220)
+mainFrame.Position = UDim2.new(0, 10, 0, 10)
+mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+mainFrame.BorderColor3 = Color3.fromRGB(255, 140, 0)
+mainFrame.BorderSizePixel = 2
+mainFrame.Active = true
+mainFrame.Draggable = true
 
-local selfBtn = Instance.new("TextButton", gui)
-selfBtn.Size = UDim2.new(0, 180, 0, 30)
-selfBtn.Position = UDim2.new(0, 10, 0, 45)
-selfBtn.Text = "Enable Self Destruct"
-selfBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
-selfBtn.MouseButton1Click:Connect(function()
-	selfDestructEnabled = not selfDestructEnabled
-	selfBtn.Text = selfDestructEnabled and "Self Destruct: ON" or "Enable Self Destruct"
-end)
+local function createButton(text, posY, color)
+	local btn = Instance.new("TextButton", mainFrame)
+	btn.Size = UDim2.new(0, 160, 0, 30)
+	btn.Position = UDim2.new(0, 10, 0, posY)
+	btn.BackgroundColor3 = color
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.Font = Enum.Font.GothamBold
+	btn.Text = text
+	return btn
+end
 
-local loopBtn = Instance.new("TextButton", gui)
-loopBtn.Size = UDim2.new(0, 180, 0, 30)
-loopBtn.Position = UDim2.new(0, 10, 0, 80)
-loopBtn.Text = "Enable Circle Loop"
-loopBtn.BackgroundColor3 = Color3.fromRGB(255, 180, 80)
-loopBtn.MouseButton1Click:Connect(function()
-	circleLoopEnabled = not circleLoopEnabled
-	loopBtn.Text = circleLoopEnabled and "Circle Loop: ON" or "Enable Circle Loop"
-end)
+local behindYaBtn = createButton("Behind Ya: OFF", 10, Color3.fromRGB(0, 0, 255))
+local selfDestructToggleBtn = createButton("Self Destruct: OFF", 50, Color3.fromRGB(255, 80, 80))
+local circleLoopToggleBtn = createButton("Circle Loop: OFF", 90, Color3.fromRGB(255, 180, 80))
+local viewPlayerBtn = createButton("👁 View Player", 130, Color3.fromRGB(80, 80, 80))
+local unviewBtn = createButton("💙 Unview Self", 170, Color3.fromRGB(80, 80, 80))
 
---// Main Loop
-RunService.Heartbeat:Connect(function()
-	if not active or cooldown then return end
+--// Teleport cooldown logic
+local function startTeleportCooldown()
+	cooldownTeleport = true
+	task.delay(2.3, function()
+		cooldownTeleport = false
+	end)
+end
 
-	local target = getNearest(85)
-	if target then
-		local root = target.Character:FindFirstChild("HumanoidRootPart")
-		if root then
-			local behindPos = root.Position - root.CFrame.LookVector * 45
-			teleportTo(behindPos)
-			floatText("Poof", Color3.fromRGB(255, 255, 255), 1)
-			task.wait(2.3)
+local function startSelfDestructCooldown()
+	cooldownSelfDestruct = true
+	task.delay(12, function()
+		cooldownSelfDestruct = false
+	end)
+end
+
+--// Viewing Players Logic
+local playersList = {}
+local function refreshPlayersList()
+	playersList = {}
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer then
+			table.insert(playersList, plr)
 		end
 	end
+	currentViewIndex = 0
+end
 
-	local closeEnemy = getNearest(35)
-	if selfDestructEnabled and closeEnemy then
-		task.wait(0.75)
-		startSelfDestruct()
+refreshPlayersList()
+
+local function viewNextPlayer()
+	if #playersList == 0 then return end
+	currentViewIndex = currentViewIndex + 1
+	if currentViewIndex > #playersList then currentViewIndex = 1 end
+	local target = playersList[currentViewIndex]
+	local hrp = getHRP(target)
+	if hrp then
+		Camera.CameraSubject = hrp.Parent:FindFirstChildOfClass("Humanoid") or hrp
+	end
+end
+
+local function unviewSelf()
+	Camera.CameraSubject = getCharacter(LocalPlayer):FindFirstChildOfClass("Humanoid") or getHRP(LocalPlayer)
+end
+
+--// Behind Ya Logic
+
+local function getNearestPlayer(radius)
+	local hrp = getHRP(LocalPlayer)
+	if not hrp then return nil end
+	local nearest = nil
+	local nearestDist = radius + 1
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local dist = (plr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
+			if dist <= radius and dist < nearestDist then
+				nearest = plr
+				nearestDist = dist
+			end
+		end
+	end
+	return nearest, nearestDist
+end
+
+local lastSafePosition = nil
+
+local function teleportBehindPlayer(target)
+	if not target or not target.Character then return end
+	local hrp = getHRP(LocalPlayer)
+	local targetHRP = getHRP(target)
+	if not hrp or not targetHRP then return end
+
+	-- Position 45 studs behind target's look vector
+	local lookVector = targetHRP.CFrame.LookVector
+	local desiredPos = targetHRP.Position - lookVector * 45
+	if not isPositionSafe(desiredPos) then
+		-- If not safe, teleport to furthest safe position instead
+		desiredPos = getFurthestSafePosition()
 	end
 
-	local farEnemy = getNearest(195)
-	if circleLoopEnabled and farEnemy then
-		startCircleLoop()
+	teleportTo(desiredPos)
+	playTeleportAnimation()
+	showFloatingText("Poof!", Color3.fromRGB(255, 255, 255), 1)
+end
+
+local function selfDestruct()
+	if cooldownSelfDestruct then return end
+	selfDestructActive = true
+	selfDestructToggleBtn.Text = "Self Destruct: STOP"
+	
+	local hrp = getHRP(LocalPlayer)
+	showFloatingText("Self Destruct!", Color3.fromRGB(255, 0, 0), 5)
+	selfDestructSound:Play()
+
+	task.wait(0.1)
+	-- Teleport into air & loop teleport furthest location for 5 seconds
+	local startTime = tick()
+	while selfDestructActive and tick() - startTime < 5 do
+		local airPos = hrp.Position + Vector3.new(0, 50, 0)
+		if isPositionSafe(airPos) then
+			teleportTo(airPos)
+		end
+		task.wait(0.35)
+		teleportTo(getFurthestSafePosition())
+		task.wait(0.35)
+	end
+	-- After stop or timeout teleport to furthest location safe
+	teleportTo(getFurthestSafePosition())
+	selfDestructToggleBtn.Text = "Self Destruct: OFF"
+	startSelfDestructCooldown()
+	selfDestructActive = false
+end
+
+local function stopSelfDestruct()
+	selfDestructActive = false
+	selfDestructToggleBtn.Text = "Self Destruct: OFF"
+	teleportTo(getFurthestSafePosition())
+	startSelfDestructCooldown()
+end
+
+local function circleLoop()
+	if cooldownTeleport then return end
+	circleLoopActive = true
+	circleLoopToggleBtn.Text = "Circle Loop: ON"
+
+	local hrp = getHRP(LocalPlayer)
+	local pos = hrp.Position
+	local center = pos
+
+	-- Get radius to stay inside map (take map bounds into account)
+	local mapSize = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
+	local radius = math.min(50, mapSize.X - math.abs(center.X), mapSize.Z - math.abs(center.Z))
+
+	local angle = 0
+	while circleLoopActive do
+		if cooldownTeleport then break end
+		local x = center.X + math.cos(angle) * radius
+		local z = center.Z + math.sin(angle) * radius
+		local newPos = Vector3.new(x, center.Y, z)
+		if isPositionSafe(newPos) then
+			teleportTo(newPos)
+		end
+		angle = angle + math.rad(30)
+		task.wait(0.12)
+	end
+	circleLoopToggleBtn.Text = "Circle Loop: OFF"
+	circleLoopActive = false
+end
+
+local function stopCircleLoop()
+	circleLoopActive = false
+	circleLoopToggleBtn.Text = "Circle Loop: OFF"
+end
+
+--// Main loop for Behind Ya
+
+RunService.Heartbeat:Connect(function()
+	if behindYaActive then
+		local target, dist = getNearestPlayer(85)
+		local hrp = getHRP(LocalPlayer)
+		if not hrp then return end
+		
+		-- Self destruct trigger if someone is very close
+		if dist and dist <= 35 and not cooldownSelfDestruct and not selfDestructActive then
+			selfDestruct()
+		end
+
+		-- Teleport behind if cooldown over and not self destructing
+		if target and dist and dist <= 85 and not cooldownTeleport and not selfDestructActive then
+			teleportBehindPlayer(target)
+			lastSafePosition = hrp.Position
+			startTeleportCooldown()
+		end
+
+		-- Circle loop if enabled and player within 195 studs
+		if circleLoopActive then
+			local near, nearDist = getNearestPlayer(195)
+			if near and nearDist <= 195 then
+				-- circleLoop() will teleport in its own loop
+			else
+				stopCircleLoop()
+			end
+		end
+
+		-- Stuck or under map detection + auto teleport out
+		if lastSafePosition then
+			local pos = hrp.Position
+			if pos.Y < 0 or (pos - lastSafePosition).Magnitude > 55 then
+				-- Teleport out to last safe pos
+				teleportTo(lastSafePosition)
+				showFloatingText("Bypassed Anti Cheat!", Color3.fromRGB(0, 255, 0), 3)
+				bypassSound:Play()
+				task.wait(0.3)
+			end
+		end
 	end
 end)
+
+--// Button events
+
+behindYaBtn.MouseButton1Click:Connect(function()
+	behindYaActive = not behindYaActive
+	behindYaBtn.Text = "Behind Ya: " .. (behindYaActive and "ON" or "OFF")
+	if not behindYaActive then
+		stopSelfDestruct()
+		stopCircleLoop()
+	end
+end)
+
+selfDestructToggleBtn.MouseButton1Click:Connect(function()
+	if selfDestructActive then
+		stopSelfDestruct()
+	else
+		if not cooldownSelfDestruct then
+			selfDestruct()
+		else
+			showFloatingText("Self Destruct Cooldown!", Color3.fromRGB(255, 100, 0), 2)
+		end
+	end
+end)
+
+circleLoopToggleBtn.MouseButton1Click:Connect(function()
+	if circleLoopActive then
+		stopCircleLoop()
+	else
+		circleLoop()
+	end
+end)
+
+viewPlayerBtn.MouseButton1Click:Connect(function()
+	viewNextPlayer()
+end)
+
+unviewBtn.MouseButton1Click:Connect(function()
+	unviewSelf()
+end)
+
+--// Initial camera setup
+unviewSelf()
