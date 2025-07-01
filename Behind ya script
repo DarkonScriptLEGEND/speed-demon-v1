@@ -1,252 +1,170 @@
 --// Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-
---// References
 local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-local Humanoid = Character:WaitForChild("Humanoid")
+local Camera = workspace.CurrentCamera
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
 
---// UI Setup
+--// Map Bounds Detection
+local function isSafePosition(pos)
+    local rayOrigin = pos + Vector3.new(0, 10, 0)
+    local rayDir = Vector3.new(0, -100, 0)
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {getCharacter()}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+    local rayResult = workspace:Raycast(rayOrigin, rayDir, raycastParams)
+    return rayResult and rayResult.Instance and rayResult.Instance:IsA("BasePart")
+end
+
+--// UI
 local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
-ScreenGui.Name = "BehindYaGui"
+ScreenGui.Name = "BehindYaGUI"
 ScreenGui.ResetOnSpawn = false
 
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(0, 140, 0, 40)
-ToggleBtn.Position = UDim2.new(0, 5, 0, 5)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255) -- blue when off
-ToggleBtn.TextColor3 = Color3.new(1,1,1)
-ToggleBtn.Text = "Behind ya OFF"
-ToggleBtn.Parent = ScreenGui
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.TextSize = 18
-ToggleBtn.Active = true
-ToggleBtn.AutoButtonColor = false
+local Button = Instance.new("TextButton", ScreenGui)
+Button.Size = UDim2.new(0, 160, 0, 40)
+Button.Position = UDim2.new(0, 10, 0, 10)
+Button.Text = "Behind Ya (OFF)"
+Button.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
+Button.TextColor3 = Color3.new(1, 1, 1)
+Button.Font = Enum.Font.GothamBold
+Button.TextSize = 16
 
--- Status text above player
-local BillboardGui = Instance.new("BillboardGui")
-BillboardGui.Adornee = HumanoidRootPart
-BillboardGui.Size = UDim2.new(0, 100, 0, 40)
-BillboardGui.StudsOffset = Vector3.new(0, 3, 0)
-BillboardGui.AlwaysOnTop = true
-BillboardGui.Parent = Character
+--// Effects
+local function showTextAbove(char, txt, color, duration)
+    local bill = Instance.new("BillboardGui", char)
+    bill.Size = UDim2.new(0, 200, 0, 50)
+    bill.Adornee = char:WaitForChild("HumanoidRootPart")
+    bill.StudsOffset = Vector3.new(0, 3, 0)
+    bill.AlwaysOnTop = true
 
-local StatusText = Instance.new("TextLabel")
-StatusText.Size = UDim2.new(1, 0, 1, 0)
-StatusText.BackgroundTransparency = 1
-StatusText.Text = ""
-StatusText.TextColor3 = Color3.new(1,1,1)
-StatusText.TextStrokeTransparency = 0
-StatusText.Font = Enum.Font.GothamBold
-StatusText.TextSize = 24
-StatusText.Parent = BillboardGui
+    local label = Instance.new("TextLabel", bill)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = txt
+    label.TextColor3 = color
+    label.TextScaled = true
+    label.Font = Enum.Font.GothamBold
 
--- Sounds
-local TeleportSound = Instance.new("Sound")
-TeleportSound.SoundId = "rbxassetid://12222242" -- teleport sound ID (replace if needed)
-TeleportSound.Volume = 1
-TeleportSound.Parent = HumanoidRootPart
-
-local SpeedCoilSound = Instance.new("Sound")
-SpeedCoilSound.SoundId = "rbxassetid://12222145" -- speed coil sound ID (replace if needed)
-SpeedCoilSound.Volume = 1
-SpeedCoilSound.Parent = HumanoidRootPart
-
---// Variables
-local enabled = false
-local selfDestructActive = false
-local isTeleportingBackForth = false
-
-local lastTeleportTime = 0
-local TELEPORT_COOLDOWN = 0.3
-
--- Bounds of map (adjust to your map's boundaries)
-local minX, maxX = -500, 500
-local minZ, maxZ = -500, 500
-
--- Helper to keep position in bounds with 5 stud margin
-local function clampPosition(pos)
-    local x = math.clamp(pos.X, minX + 5, maxX - 5)
-    local y = pos.Y
-    local z = math.clamp(pos.Z, minZ + 5, maxZ - 5)
-    return Vector3.new(x, y, z)
-end
-
--- Get furthest safe position from current pos (within bounds)
-local function getFurthestSafePos(currentPos)
-    local candidates = {
-        Vector3.new(minX + 10, currentPos.Y, minZ + 10),
-        Vector3.new(minX + 10, currentPos.Y, maxZ - 10),
-        Vector3.new(maxX - 10, currentPos.Y, minZ + 10),
-        Vector3.new(maxX - 10, currentPos.Y, maxZ - 10),
-    }
-
-    local furthest = candidates[1]
-    local maxDist = 0
-    for _, pos in ipairs(candidates) do
-        local dist = (pos - currentPos).Magnitude
-        if dist > maxDist then
-            maxDist = dist
-            furthest = pos
-        end
-    end
-    return clampPosition(furthest)
-end
-
--- Check if behind target is clear (raycast)
-local function canTeleportBehind(targetHRP)
-    local backDir = -targetHRP.CFrame.LookVector
-    local checkPos = targetHRP.Position + backDir * 45
-    checkPos = clampPosition(checkPos)
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {Character}
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-
-    local rayResult = workspace:Raycast(targetHRP.Position + Vector3.new(0, 2, 0), backDir * 45, rayParams)
-    return (not rayResult) or (rayResult.Instance == nil)
-end
-
--- Display "Poof" text above player for 1 second
-local function showPoofText()
-    StatusText.Text = "Poof"
-    StatusText.TextColor3 = Color3.new(1, 1, 1)
-    task.delay(1, function()
-        if not selfDestructActive then
-            StatusText.Text = ""
-        end
+    task.delay(duration, function()
+        bill:Destroy()
     end)
 end
 
--- Teleport behind player or furthest safe pos if blocked
-local function teleportBehind(targetHRP)
-    if canTeleportBehind(targetHRP) then
-        local backPos = targetHRP.Position - targetHRP.CFrame.LookVector * 45
-        backPos = clampPosition(backPos)
-        HumanoidRootPart.CFrame = CFrame.new(backPos, targetHRP.Position)
+--// Sounds
+local function playSound(id, parent)
+    local s = Instance.new("Sound", parent)
+    s.SoundId = "rbxassetid://"..id
+    s.Volume = 1
+    s:Play()
+    game.Debris:AddItem(s, 3)
+end
+
+--// Teleport Functions
+local function teleportTo(pos)
+    local char = getCharacter()
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if hrp and isSafePosition(pos) then
+        hrp.CFrame = CFrame.new(pos)
+    end
+end
+
+local function getFurthestSafePosition()
+    local char = getCharacter()
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local maxDist = 0
+    local bestPos = hrp.Position
+
+    for x = -150, 150, 15 do
+        for z = -150, 150, 15 do
+            local testPos = hrp.Position + Vector3.new(x, 0, z)
+            local dist = (testPos - hrp.Position).Magnitude
+            if dist > maxDist and isSafePosition(testPos) then
+                maxDist = dist
+                bestPos = testPos
+            end
+        end
+    end
+    return bestPos
+end
+
+local lastTeleportTime = 0
+
+local function teleportBehindPlayer(target)
+    local now = tick()
+    if now - lastTeleportTime < 2.3 then return end
+    lastTeleportTime = now
+
+    local targetHRP = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if not targetHRP then return end
+
+    local backVec = -targetHRP.CFrame.LookVector.Unit * 45
+    local behindPos = targetHRP.Position + backVec
+    if isSafePosition(behindPos) then
+        teleportTo(behindPos)
     else
-        local furthest = getFurthestSafePos(HumanoidRootPart.Position)
-        HumanoidRootPart.CFrame = CFrame.new(furthest)
-    end
-    TeleportSound:Play()
-    showPoofText()
-end
-
--- Self destruct sequence
-local function selfDestructSequence()
-    if selfDestructActive then return end
-    selfDestructActive = true
-
-    StatusText.Text = "Self Destruct"
-    StatusText.TextColor3 = Color3.new(1, 0, 0) -- red
-
-    task.wait(0.1) -- short delay
-
-    -- Teleport into air
-    local airPos = HumanoidRootPart.Position + Vector3.new(0, 60, 0)
-    HumanoidRootPart.CFrame = CFrame.new(airPos)
-
-    local startTime = tick()
-    isTeleportingBackForth = true
-
-    while tick() - startTime < 5 and isTeleportingBackForth do
-        local leftPos = Vector3.new((minX + maxX) / 2 - 50, airPos.Y, (minZ + maxZ) / 2)
-        local rightPos = Vector3.new((minX + maxX) / 2 + 50, airPos.Y, (minZ + maxZ) / 2)
-
-        HumanoidRootPart.CFrame = CFrame.new(leftPos)
-        task.wait(0.35)
-        if not isTeleportingBackForth then break end
-        HumanoidRootPart.CFrame = CFrame.new(rightPos)
-        task.wait(0.35)
+        teleportTo(getFurthestSafePosition())
     end
 
-    -- Teleport to center
-    local centerPos = Vector3.new((minX + maxX) / 2, airPos.Y, (minZ + maxZ) / 2)
-    HumanoidRootPart.CFrame = CFrame.new(centerPos)
-
-    selfDestructActive = false
-    isTeleportingBackForth = false
-    StatusText.Text = ""
+    playSound("12222242", targetHRP) -- poof sound
+    showTextAbove(getCharacter(), "Poof", Color3.fromRGB(255, 255, 255), 1)
 end
 
--- Teleport behind logic loop
-local function behindYaLoop()
-    local lastTarget = nil
-    local lastTeleportTime = 0
+local function startSelfDestruct()
+    local char = getCharacter()
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-    while enabled and Character and Humanoid and HumanoidRootPart and Humanoid.Health > 0 do
-        local nearestPlayer = nil
-        local nearestDistance = math.huge
+    showTextAbove(char, "Self Destruct", Color3.new(1, 0, 0), 5)
 
-        for _, plr in pairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 then
-                local dist = (plr.Character.HumanoidRootPart.Position - HumanoidRootPart.Position).Magnitude
-                if dist < nearestDistance and dist <= 85 then
-                    nearestPlayer = plr
-                    nearestDistance = dist
-                end
-            end
-        end
+    local endTime = tick() + 5
+    while tick() < endTime do
+        teleportTo(getFurthestSafePosition())
+        wait(0.1)
+    end
 
-        if nearestPlayer and nearestPlayer.Character then
-            local targetHRP = nearestPlayer.Character.HumanoidRootPart
-            local dist = (targetHRP.Position - HumanoidRootPart.Position).Magnitude
-            local vel = nearestPlayer.Character.HumanoidRootPart.AssemblyLinearVelocity.Magnitude
-
-            -- Teleport behind if target moving and cooldown passed
-            local currentTime = tick()
-            if (currentTime - lastTeleportTime) >= TELEPORT_COOLDOWN and vel > 0.1 then
-                teleportBehind(targetHRP)
-                lastTeleportTime = currentTime
-                lastTarget = nearestPlayer
-            end
-
-            -- Self destruct if very close
-            if dist <= 6 and not selfDestructActive then
-                task.spawn(selfDestructSequence)
-            end
-        end
-
-        task.wait(0.1)
+    local middle = workspace:GetCenter() or Vector3.new(0, 100, 0)
+    for i = 1, 15 do
+        local offset = (i % 2 == 0) and Vector3.new(0, 30, 0) or Vector3.new(0, -30, 0)
+        teleportTo(middle + offset)
+        wait(0.35)
     end
 end
 
--- Button toggling
-ToggleBtn.MouseButton1Click:Connect(function()
+--// Toggle & Logic
+local enabled = false
+Button.MouseButton1Click:Connect(function()
     enabled = not enabled
-
-    if enabled then
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 221, 0) -- yellow on
-        ToggleBtn.Text = "Behind ya ON"
-        task.spawn(behindYaLoop)
-    else
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255) -- blue off
-        ToggleBtn.Text = "Behind ya OFF"
-        selfDestructActive = false
-        isTeleportingBackForth = false
-        StatusText.Text = ""
-    end
+    Button.Text = "Behind Ya ("..(enabled and "ON" or "OFF")..")"
+    Button.BackgroundColor3 = enabled and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
 end)
 
--- Character update handling
-local function updateCharacterRefs(char)
-    Character = char
-    HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
-    Humanoid = char:WaitForChild("Humanoid")
-    TeleportSound.Parent = HumanoidRootPart
-    SpeedCoilSound.Parent = HumanoidRootPart
-    BillboardGui.Adornee = HumanoidRootPart
-end
+RunService.Heartbeat:Connect(function()
+    if not enabled then return end
+    local char = getCharacter()
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-LocalPlayer.CharacterAdded:Connect(updateCharacterRefs)
-updateCharacterRefs(Character)
+    local closestPlayer, dist = nil, math.huge
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local targetHRP = plr.Character.HumanoidRootPart
+            local d = (targetHRP.Position - hrp.Position).Magnitude
+            if d < dist then
+                closestPlayer, dist = plr, d
+            end
+        end
+    end
 
--- Reset flags on humanoid death
-Humanoid.Died:Connect(function()
-    selfDestructActive = false
-    isTeleportingBackForth = false
-    StatusText.Text = ""
+    if closestPlayer and dist < 85 then
+        teleportBehindPlayer(closestPlayer)
+        wait(0.1)
+        local stillClose = (closestPlayer.Character.HumanoidRootPart.Position - hrp.Position).Magnitude < 10
+        if stillClose then
+            startSelfDestruct()
+        end
+    end
 end)
