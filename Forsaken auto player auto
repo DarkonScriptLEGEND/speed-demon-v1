@@ -1,0 +1,66 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local hrp = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+local function isInForsaken()
+    -- You can check game.PlaceId or game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+    -- Example Forsaken PlaceId (replace with real IDs):
+    local forsakenPlaceIds = {
+        123456789, -- Example Forsaken place id survivor
+        987654321, -- Example Forsaken place id killer
+    }
+    for _, id in pairs(forsakenPlaceIds) do
+        if game.PlaceId == id then
+            return true
+        end
+    end
+    return false
+end
+
+-- Simple helper to get nearest player excluding self
+local function getNearestPlayer()
+    local nearest = nil
+    local nearestDist = math.huge
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local dist = (plr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = plr
+            end
+        end
+    end
+    return nearest, nearestDist
+end
+
+if isInForsaken() then
+    print("Forsaken detected! Starting Auto Play...")
+
+    -- Example Auto Survivor behavior: run away from nearest killer (simplified)
+    RunService.Heartbeat:Connect(function()
+        local nearest, dist = getNearestPlayer()
+        if nearest and nearest.Character and nearest.Character:FindFirstChild("HumanoidRootPart") then
+            local enemyPos = nearest.Character.HumanoidRootPart.Position
+            local myPos = hrp.Position
+
+            -- If enemy is too close, run away
+            if dist < 30 then
+                local direction = (myPos - enemyPos).Unit
+                local targetPos = myPos + direction * 20
+                -- Move towards targetPos using Humanoid:MoveTo()
+                humanoid:MoveTo(targetPos)
+            else
+                -- Idle or roam randomly
+                humanoid:MoveTo(myPos + Vector3.new(math.random(-10,10),0,math.random(-10,10)))
+            end
+        end
+    end)
+
+    -- You could add a similar basic auto killer mode here
+else
+    print("Unsupported game. Auto play script disabled.")
+end
