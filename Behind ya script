@@ -2,59 +2,55 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local SoundService = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
-local character = function()
-    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+-- Utility functions
+local function getCharacter(plr)
+	return plr.Character or plr.CharacterAdded:Wait()
 end
 
-local function getHRP()
-    return character():WaitForChild("HumanoidRootPart", 5)
+local function getHRP(plr)
+	local char = getCharacter(plr)
+	return char and char:FindFirstChild("HumanoidRootPart")
 end
 
+-- Check if position is inside map bounds and safe to teleport
 local function safeCFrame(pos)
-    local size = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
-    if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z or pos.Y < -10 then
-        return false
-    end
-    local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
-    local parts = Workspace:FindPartsInRegion3(region, nil, 5)
-    for _, p in pairs(parts) do
-        if p.CanCollide and p.Transparency < 0.95 then return true end
-    end
-    return false
+	local size = Workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
+	if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z then
+		return false
+	end
+	local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
+	local parts = Workspace:FindPartsInRegion3(region, nil, 5)
+	for _, p in pairs(parts) do
+		if p.CanCollide and p.Transparency < 0.95 then return true end
+	end
+	return false
 end
 
+-- Find furthest safe location from player
 local function getFurthest()
-    local root = getHRP()
-    local best = root.Position
-    local maxDist = 0
-    for _, part in pairs(Workspace:GetDescendants()) do
-        if part:IsA("BasePart") then
-            local pos = part.Position + Vector3.new(0, 5, 0)
-            if safeCFrame(pos) then
-                local dist = (pos - root.Position).Magnitude
-                if dist > maxDist then
-                    maxDist = dist
-                    best = pos
-                end
-            end
-        end
-    end
-    return best
+	local root = getHRP(LocalPlayer)
+	if not root then return Vector3.new(0,10,0) end
+	local best = root.Position
+	local maxDist = 0
+	for _, part in pairs(Workspace:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local pos = part.Position + Vector3.new(0, 5, 0)
+			if safeCFrame(pos) then
+				local dist = (pos - root.Position).Magnitude
+				if dist > maxDist then
+					maxDist = dist
+					best = pos
+				end
+			end
+		end
+	end
+	return best
 end
 
-local function teleportTo(pos)
-    local root = getHRP()
-    if not safeCFrame(pos) then return end
-    root.CFrame = CFrame.new(pos)
-    teleportSound:Play()
-    playTeleportAnimation()
-end
-
---// GUI Setup
+-- GUI Setup
 local gui = Instance.new("ScreenGui", game.CoreGui)
 gui.Name = "BehindYaUI"
 
@@ -64,6 +60,7 @@ toggleBtn.Position = UDim2.new(0, 10, 0, 10)
 toggleBtn.Text = "Behind Ya: OFF"
 toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
 toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+toggleBtn.AutoButtonColor = false
 
 local viewBtn = Instance.new("TextButton", gui)
 viewBtn.Size = UDim2.new(0, 130, 0, 30)
@@ -79,129 +76,318 @@ unviewBtn.Text = "💙 Unview Self"
 unviewBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 unviewBtn.TextColor3 = Color3.new(1, 1, 1)
 
---// Teleport Sound
-local teleportSound = Instance.new("Sound", SoundService)
-teleportSound.SoundId = "rbxassetid://9118823102"
+local testSelfDestructBtn = Instance.new("TextButton", gui)
+testSelfDestructBtn.Size = UDim2.new(0, 150, 0, 30)
+testSelfDestructBtn.Position = UDim2.new(0, 10, 0, 120)
+testSelfDestructBtn.Text = "Test Self-Destruct"
+testSelfDestructBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+testSelfDestructBtn.TextColor3 = Color3.new(1, 1, 1)
+
+local testCircleLoopBtn = Instance.new("TextButton", gui)
+testCircleLoopBtn.Size = UDim2.new(0, 150, 0, 30)
+testCircleLoopBtn.Position = UDim2.new(0, 10, 0, 160)
+testCircleLoopBtn.Text = "Test Circle Loop"
+testCircleLoopBtn.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+testCircleLoopBtn.TextColor3 = Color3.new(1, 1, 1)
+
+-- Teleport and speed sounds
+local teleportSound = Instance.new("Sound", game.SoundService)
+teleportSound.SoundId = "rbxassetid://9118823102" -- Replace with your preferred teleport sound
 teleportSound.Volume = 2
 
---// Teleport Animation
-local function playTeleportAnimation()
-    local humanoid = character():FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        local anim = Instance.new("Animation")
-        anim.AnimationId = "rbxassetid://9133762206"
-        local track = humanoid:LoadAnimation(anim)
-        track:Play()
-    end
+local speedSound = Instance.new("Sound", game.SoundService)
+speedSound.SoundId = "rbxassetid://9118829390" -- Speed coil sound
+speedSound.Volume = 1
+
+-- Text display on screen
+local function showText(msg, color, duration)
+	local textLabel = Instance.new("TextLabel", gui)
+	textLabel.Text = msg
+	textLabel.TextColor3 = color or Color3.new(1,1,1)
+	textLabel.BackgroundTransparency = 0.5
+	textLabel.BackgroundColor3 = Color3.new(0,0,0)
+	textLabel.Size = UDim2.new(0, 200, 0, 30)
+	textLabel.Position = UDim2.new(0.5, -100, 1, -40)
+	textLabel.TextScaled = true
+	textLabel.Font = Enum.Font.SourceSansBold
+	task.delay(duration or 3, function()
+		if textLabel then
+			textLabel:Destroy()
+		end
+	end)
+	return textLabel
 end
 
---// Poof Message
-local function showPoof()
-    local root = getHRP()
-    local poof = Instance.new("BillboardGui", root)
-    poof.Size = UDim2.new(0, 200, 0, 50)
-    poof.Adornee = root
-    poof.AlwaysOnTop = true
-    local label = Instance.new("TextLabel", poof)
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = "Poof"
-    label.TextColor3 = Color3.new(1, 1, 1)
-    label.TextScaled = true
-    task.delay(1, function() poof:Destroy() end)
-end
-
---// Cooldown Indicator
-local cooldownLabel = Instance.new("TextLabel", gui)
-cooldownLabel.Size = UDim2.new(0, 150, 0, 25)
-cooldownLabel.Position = UDim2.new(0, 10, 0, 125)
-cooldownLabel.BackgroundTransparency = 1
-cooldownLabel.TextColor3 = Color3.new(0, 1, 0)
-cooldownLabel.TextScaled = true
-cooldownLabel.Text = ""
-
---// Self Destruct Logic
-local function selfDestructSequence()
-    local root = getHRP()
-    local startTime = tick()
-    local warning = Instance.new("BillboardGui", root)
-    warning.Size = UDim2.new(0, 250, 0, 50)
-    warning.Adornee = root
-    warning.AlwaysOnTop = true
-    local label = Instance.new("TextLabel", warning)
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = "SELF DESTRUCT"
-    label.TextColor3 = Color3.new(1, 0, 0)
-    label.TextScaled = true
-
-    task.delay(5, function()
-        warning:Destroy()
-        local midMap = Vector3.new(0, 250, 0)
-        for i = 1, 10 do
-            teleportTo(midMap + Vector3.new(0, (i % 2 == 0 and 15 or -15), 0))
-            task.wait(0.35)
-        end
-        getHRP().Anchored = false
-    end)
-end
-
---// Teleport Out If Stuck
-local function checkIfStuck()
-    local root = getHRP()
-    if root.Position.Y < -10 or not safeCFrame(root.Position) then
-        task.wait(0.1)
-        teleportTo(getFurthest())
-        cooldownLabel.Text = "Successfully bypassed anti cheat"
-        task.delay(3, function() cooldownLabel.Text = "" end)
-        return true
-    end
-    return false
-end
-
---// Main Logic
-local enabled = false
+-- Cooldown state
 local cooldown = false
 
+-- Teleport helper: teleport player safely with teleport sound and animation
+local function teleportWithChecks(pos)
+	if not pos then return end
+	local hrp = getHRP(LocalPlayer)
+	if not hrp then return end
+	if cooldown then return end
+	
+	teleportSound:Play()
+	hrp.CFrame = CFrame.new(pos)
+end
+
+-- Check if stuck inside walls or under map
+local function isStuck()
+	local hrp = getHRP(LocalPlayer)
+	if not hrp then return false end
+
+	-- Cast ray downwards a bit to see if ground is below 4 studs
+	local ray = Ray.new(hrp.Position, Vector3.new(0, -5, 0))
+	local part, pos = Workspace:FindPartOnRay(ray, LocalPlayer.Character)
+	if not part then
+		-- No ground under player, likely stuck under map
+		return true
+	end
+
+	-- Check if inside wall (collidable part too close)
+	local region = Region3.new(hrp.Position - Vector3.new(2,3,2), hrp.Position + Vector3.new(2,3,2))
+	local parts = Workspace:FindPartsInRegion3(region, nil, 5)
+	for _, p in pairs(parts) do
+		if p.CanCollide and p.Transparency < 0.95 and p ~= hrp then
+			return true
+		end
+	end
+
+	return false
+end
+
+-- Auto teleport out if stuck with delay, cooldown, and bypass message
+local function autoTeleportOut()
+	if cooldown then return end
+	cooldown = true
+
+	local furthest = getFurthest()
+	local hrp = getHRP(LocalPlayer)
+	if hrp then
+		task.wait(0.1)
+		teleportSound:Play()
+		hrp.CFrame = CFrame.new(furthest)
+		showText("Successfully bypassed anti cheat", Color3.fromRGB(0,255,0), 3)
+	end
+
+	task.delay(2.3, function()
+		cooldown = false
+		toggleBtn.Text = "Behind Ya: OFF"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
+		isActive = false
+	end)
+end
+
+-- Variables
+local isActive = false
+local viewingPlayer = nil
+local humanoid = nil
+
+-- Teleport behind player helper
+local function teleportBehindPlayer(target)
+	if not target then return false end
+	local hrp = getHRP(LocalPlayer)
+	local targetHRP = getHRP(target)
+	if not hrp or not targetHRP then return false end
+
+	-- Calculate 45 studs behind target (relative to target lookVector)
+	local behindPos = targetHRP.Position - targetHRP.CFrame.LookVector * 45
+	-- Try safe check
+	if safeCFrame(behindPos) then
+		teleportWithChecks(behindPos)
+	else
+		-- Teleport to furthest instead if blocked
+		local furthest = getFurthest()
+		teleportWithChecks(furthest)
+	end
+	return true
+end
+
+-- Self destruct sequence
+local function selfDestruct()
+	local hrp = getHRP(LocalPlayer)
+	if not hrp then return end
+	local humanoid = getCharacter(LocalPlayer):FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local redText = Instance.new("TextLabel", gui)
+	redText.Text = "SELF DESTRUCT"
+	redText.TextColor3 = Color3.fromRGB(255, 0, 0)
+	redText.BackgroundTransparency = 0.8
+	redText.Size = UDim2.new(0, 300, 0, 60)
+	redText.Position = UDim2.new(0.5, -150, 0.4, 0)
+	redText.TextScaled = true
+	redText.Font = Enum.Font.SourceSansBold
+
+	task.wait(0.75)
+	humanoid.Health = 0
+
+	task.delay(1, function()
+		if redText then
+			redText:Destroy()
+		end
+	end)
+end
+
+-- Circle loop: teleport around player in circle inside map bounds
+local function circleLoop()
+	local root = getHRP(LocalPlayer)
+	if not root then return end
+
+	local centerPos = root.Position
+	local radius = 25
+	local count = 5
+	local speed = 45
+	local humanoid = getCharacter(LocalPlayer):FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local originalSpeed = humanoid.WalkSpeed
+	humanoid.WalkSpeed = speed
+	speedSound:Play()
+
+	for i = 1, count do
+		for deg = 0, 360, 10 do
+			local rad = math.rad(deg)
+			local x = centerPos.X + math.cos(rad) * radius
+			local z = centerPos.Z + math.sin(rad) * radius
+			local y = centerPos.Y
+			local pos = Vector3.new(x, y, z)
+
+			if safeCFrame(pos) then
+				teleportWithChecks(pos)
+			else
+				-- Try smaller radius to find safe spot
+				local tries = 0
+				local maxTries = 10
+				local newRadius = radius
+				local safePos = nil
+
+				while tries < maxTries do
+					newRadius = newRadius - 2
+					if newRadius <= 0 then break end
+					x = centerPos.X + math.cos(rad) * newRadius
+					z = centerPos.Z + math.sin(rad) * newRadius
+					pos = Vector3.new(x, y, z)
+					if safeCFrame(pos) then
+						safePos = pos
+						break
+					end
+					tries = tries + 1
+				end
+
+				if safePos then
+					teleportWithChecks(safePos)
+				end
+			end
+
+			task.wait(0.2)
+		end
+	end
+
+	humanoid.WalkSpeed = originalSpeed
+end
+
+-- Track last safe position to recover from stuck
+local lastSafePos = nil
+
+-- Main loop and logic
+local function mainLoop()
+	local hrp = getHRP(LocalPlayer)
+	if not hrp then return end
+
+	while isActive do
+		local pos = hrp.Position
+
+		-- Save last safe position
+		if safeCFrame(pos) then
+			lastSafePos = pos
+		end
+
+		-- Check if stuck
+		if isStuck() then
+			autoTeleportOut()
+			break
+		end
+
+		-- Check for players within radius for actions
+		local playersNearby = {}
+		for _, plr in pairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer then
+				local targetHRP = getHRP(plr)
+				if targetHRP then
+					local dist = (targetHRP.Position - pos).Magnitude
+					if dist <= 35 then
+						-- Self destruct delay 0.75s
+						task.wait(0.75)
+						selfDestruct()
+						break
+					elseif dist <= 85 then
+						-- Teleport behind closest player within 85 studs
+						teleportBehindPlayer(plr)
+					elseif dist <= 195 then
+						-- Loop circle teleport on map with WalkSpeed 45
+						circleLoop()
+					end
+				end
+			end
+		end
+
+		task.wait(0.2)
+	end
+end
+
+-- Button callbacks
 toggleBtn.MouseButton1Click:Connect(function()
-    enabled = not enabled
-    toggleBtn.Text = "Behind Ya: " .. (enabled and "ON" or "OFF")
-    toggleBtn.BackgroundColor3 = enabled and Color3.fromRGB(255, 255, 0) or Color3.fromRGB(0, 0, 255)
+	isActive = not isActive
+	if isActive then
+		toggleBtn.Text = "Behind Ya: ON"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+		task.spawn(mainLoop)
+	else
+		toggleBtn.Text = "Behind Ya: OFF"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 255)
+	end
 end)
 
-RunService.Heartbeat:Connect(function()
-    if not enabled or cooldown then return end
-    local root = getHRP()
-    local closest, distance = nil, math.huge
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            local theirRoot = plr.Character.HumanoidRootPart
-            local dist = (theirRoot.Position - root.Position).Magnitude
-            if dist < 85 and dist < distance then
-                closest, distance = theirRoot, dist
-            end
-        end
-    end
-    if closest then
-        local direction = (closest.Position - root.Position).Unit * -45
-        local behindPos = closest.Position + direction
-        if not safeCFrame(behindPos) then
-            if not checkIfStuck() then
-                behindPos = getFurthest()
-            end
-        end
-        teleportTo(behindPos)
-        showPoof()
+viewBtn.MouseButton1Click:Connect(function()
+	local playersList = {}
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer then
+			table.insert(playersList, plr)
+		end
+	end
+	if #playersList == 0 then
+		showText("No other players found", Color3.new(1, 1, 0), 3)
+		return
+	end
+	-- Cycle through players
+	local idx = 1
+	viewingPlayer = playersList[idx]
+	Camera.CameraSubject = getCharacter(viewingPlayer):FindFirstChildOfClass("Humanoid")
+	showText("Viewing: "..viewingPlayer.Name, Color3.new(0,1,1), 3)
 
-        if (closest.Position - root.Position).Magnitude < 6 then
-            selfDestructSequence()
-        end
-
-        cooldown = true
-        cooldownLabel.Text = "Cooldown..."
-        task.delay(2.3, function()
-            cooldown = false
-            cooldownLabel.Text = ""
-        end)
-    end
+	-- Cycle function
+	viewBtn.MouseButton1Click:Connect(function()
+		idx = idx + 1
+		if idx > #playersList then idx = 1 end
+		viewingPlayer = playersList[idx]
+		Camera.CameraSubject = getCharacter(viewingPlayer):FindFirstChildOfClass("Humanoid")
+		showText("Viewing: "..viewingPlayer.Name, Color3.new(0,1,1), 3)
+	end)
 end)
+
+unviewBtn.MouseButton1Click:Connect(function()
+	viewingPlayer = nil
+	Camera.CameraSubject = getCharacter(LocalPlayer):FindFirstChildOfClass("Humanoid")
+	showText("Viewing self", Color3.new(0,1,1), 3)
+end)
+
+testSelfDestructBtn.MouseButton1Click:Connect(function()
+	selfDestruct()
+end)
+
+testCircleLoopBtn.MouseButton1Click:Connect(function()
+	circleLoop()
+end)
+
