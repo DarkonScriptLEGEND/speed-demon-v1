@@ -1,460 +1,148 @@
 --// Services
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
-local TweenService = game:GetService("TweenService")
+local Players, RunService, Workspace = game:GetService("Players"), game:GetService("RunService"), game:GetService("Workspace")
+local TweenService, LocalPlayer = game:GetService("TweenService"), Players.LocalPlayer
+local SoundService, Camera = game:GetService("SoundService"), Workspace.CurrentCamera
 
 --// Variables
-local isActive = false
-local selfDestructActive = false
-local circleLoopActive = false
-local selfDestructCooldown = false
-local circleLoopCooldown = false
-local antiAfkActive = false
-local guiVisible = true
-local lastSafePosition = nil
+local gui, hrp, char, active, cooldown = Instance.new("ScreenGui", game.CoreGui), nil, nil, false, false
+local radiusBehind, radiusFlee, radiusClose = 85, 195, 35
+local loopActive, selfDestructActive = false, false
 
---// Helper Functions
-local function getCharacter(plr)
-    return plr.Character or plr.CharacterAdded:Wait()
+--// Sounds
+local teleportSound = Instance.new("Sound", SoundService)
+teleportSound.SoundId = "rbxassetid://9118823102"
+teleportSound.Volume = 2
+
+local bypassSound = Instance.new("Sound", SoundService)
+bypassSound.SoundId = "rbxassetid://7489482123"
+bypassSound.Volume = 2
+
+--// Helpers
+local function getChar() char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait() hrp = char:WaitForChild("HumanoidRootPart") end
+local function showText(txt, color, dur)
+	local b = Instance.new("BillboardGui", char) b.Adornee = hrp b.Size = UDim2.new(0,200,0,50)
+	local l = Instance.new("TextLabel", b) l.Size = UDim2.new(1,0,1,0) l.Text = txt l.TextColor3 = color l.BackgroundTransparency = 1
+	game.Debris:AddItem(b, dur)
 end
 
-local function getHRP(plr)
-    local char = getCharacter(plr)
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function safeCFrame(pos)
-    local size = workspace:GetExtentsSize() / 2 - Vector3.new(5, 0, 5)
-    if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z then
-        return false
-    end
-    local region = Region3.new(pos - Vector3.new(2, 3, 2), pos + Vector3.new(2, 3, 2))
-    local parts = workspace:FindPartsInRegion3(region, nil, 5)
-    for _, p in pairs(parts) do
-        if p.CanCollide and p.Transparency < 0.95 then return true end
-    end
-    return false
+local function safePos(pos)
+	local size = Workspace:GetExtentsSize()/2 - Vector3.new(5,0,5)
+	if math.abs(pos.X) > size.X or math.abs(pos.Z) > size.Z then return false end
+	local reg = Region3.new(pos-Vector3.new(2,3,2), pos+Vector3.new(2,3,2))
+	local parts = Workspace:FindPartsInRegion3(reg, nil, 5)
+	for _, p in pairs(parts) do if p.CanCollide and p.Transparency < 0.95 then return true end end
+	return false
 end
 
 local function getFurthest()
-    local root = getHRP(LocalPlayer)
-    if not root then return nil end
-    local best = root.Position
-    local maxDist = 0
-    for _, part in pairs(workspace:GetDescendants()) do
-        if part:IsA("BasePart") then
-            local pos = part.Position + Vector3.new(0, 5, 0)
-            if safeCFrame(pos) then
-                local dist = (pos - root.Position).Magnitude
-                if dist > maxDist then
-                    maxDist = dist
-                    best = pos
-                end
-            end
-        end
-    end
-    return best
+	local pos, maxDist = hrp.Position, 0
+	local best = pos
+	for _, p in ipairs(Workspace:GetDescendants()) do
+		if p:IsA("BasePart") and safePos(p.Position + Vector3.new(0,5,0)) then
+			local dist = (p.Position - pos).Magnitude
+			if dist > maxDist then maxDist = dist best = p.Position + Vector3.new(0,5,0) end
+		end
+	end
+	return best
 end
 
-local teleportSound = Instance.new("Sound", game.SoundService)
-teleportSound.SoundId = "rbxassetid://9118823102" -- Your teleport sound
-teleportSound.Volume = 2
-
-local function playTeleportSound()
-    if teleportSound.IsPlaying then teleportSound:Stop() end
-    teleportSound:Play()
+local function teleportTo(pos)
+	teleportSound:Play()
+	hrp.CFrame = CFrame.new(pos)
 end
 
-local function showText(msg, color, duration)
-    local textLabel = Instance.new("TextLabel")
-    textLabel.Text = msg
-    textLabel.TextColor3 = color
-    textLabel.BackgroundTransparency = 0.5
-    textLabel.BackgroundColor3 = Color3.new(0, 0, 0)
-    textLabel.Size = UDim2.new(0, 350, 0, 50)
-    textLabel.Position = UDim2.new(0.5, -175, 0.1, 0)
-    textLabel.TextScaled = true
-    textLabel.Font = Enum.Font.GothamBold
-    textLabel.Parent = game.CoreGui
-    task.delay(duration, function()
-        textLabel:Destroy()
-    end)
+local function startCooldown()
+	cooldown = true
+	showText("Cooldown...", Color3.fromRGB(255,255,0), 2.3)
+	task.wait(2.3)
+	cooldown = false
 end
 
-local function teleportWithChecks(pos)
-    if not pos then return false end
-    playTeleportSound()
-    local root = getHRP(LocalPlayer)
-    if root then
-        root.CFrame = CFrame.new(pos.X, pos.Y + 3, pos.Z)
-        lastSafePosition = pos
-        return true
-    end
-    return false
+local function escapeStuck()
+	if hrp.Position.Y < -10 then
+		bypassSound:Play()
+		showText("Successfully bypassed anti cheat", Color3.fromRGB(0,255,0), 3)
+		teleportTo(getFurthest())
+		startCooldown()
+	end
 end
 
---// Main GUI creation and styling
-local gui = Instance.new("ScreenGui")
-gui.Name = "UntouchableScriptGUI"
-gui.Parent = game.CoreGui
-
--- Main draggable frame
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 320, 0, 240)
-frame.Position = UDim2.new(0.7, 0, 0.3, 0)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-frame.BorderSizePixel = 0
-frame.ClipsDescendants = true
-frame.AnchorPoint = Vector2.new(0.5, 0.5)
-frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-frame.Visible = true
-frame.ZIndex = 5
-frame.Name = "MainFrame"
-
--- UI stroke & rounded corners
-local stroke = Instance.new("UIStroke", frame)
-stroke.Color = Color3.fromRGB(255, 165, 0)
-stroke.Thickness = 3
-
-local corner = Instance.new("UICorner", frame)
-corner.CornerRadius = UDim.new(0, 15)
-
--- Title bar
-local titleBar = Instance.new("Frame", frame)
-titleBar.Size = UDim2.new(1, 0, 0, 35)
-titleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-titleBar.BorderSizePixel = 0
-titleBar.Name = "TitleBar"
-
-local titleLabel = Instance.new("TextLabel", titleBar)
-titleLabel.Text = "Untouchable Script"
-titleLabel.Size = UDim2.new(1, -60, 1, 0)
-titleLabel.Position = UDim2.new(0, 10, 0, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextSize = 20
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-titleLabel.Name = "TitleLabel"
-
--- Close/open button on title bar
-local toggleBtn = Instance.new("TextButton", titleBar)
-toggleBtn.Size = UDim2.new(0, 40, 1, 0)
-toggleBtn.Position = UDim2.new(1, -45, 0, 0)
-toggleBtn.Text = "✕"
-toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-toggleBtn.TextColor3 = Color3.new(1, 1, 1)
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.TextSize = 24
-toggleBtn.AutoButtonColor = true
-toggleBtn.Name = "ToggleBtn"
-
--- Container for buttons
-local buttonsHolder = Instance.new("Frame", frame)
-buttonsHolder.Size = UDim2.new(1, -20, 1, -45)
-buttonsHolder.Position = UDim2.new(0, 10, 0, 40)
-buttonsHolder.BackgroundTransparency = 1
-buttonsHolder.Name = "ButtonsHolder"
-
--- UIListLayout for buttons
-local layout = Instance.new("UIListLayout", buttonsHolder)
-layout.SortOrder = Enum.SortOrder.LayoutOrder
-layout.Padding = UDim.new(0, 10)
-
--- Helper to create styled buttons
-local function createButton(text)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 40)
-    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    btn.TextColor3 = Color3.fromRGB(255, 165, 0)
-    btn.Font = Enum.Font.GothamSemibold
-    btn.TextSize = 18
-    btn.Text = text
-    btn.AutoButtonColor = true
-
-    local btnCorner = Instance.new("UICorner", btn)
-    btnCorner.CornerRadius = UDim.new(0, 8)
-
-    local btnStroke = Instance.new("UIStroke", btn)
-    btnStroke.Color = Color3.fromRGB(255, 165, 0)
-    btnStroke.Thickness = 1.5
-
-    return btn
-end
-
--- Create buttons
-local circleLoopBtn = createButton("Start Circle Loop")
-circleLoopBtn.Name = "CircleLoopBtn"
-circleLoopBtn.Parent = buttonsHolder
-
-local selfDestructBtn = createButton("Start Self-Destruct")
-selfDestructBtn.Name = "SelfDestructBtn"
-selfDestructBtn.Parent = buttonsHolder
-
-local antiAfkBtn = createButton("Toggle Anti AFK")
-antiAfkBtn.Name = "AntiAfkBtn"
-antiAfkBtn.Parent = buttonsHolder
-
-local hideGuiBtn = createButton("Hide GUI")
-hideGuiBtn.Name = "HideGuiBtn"
-hideGuiBtn.Parent = buttonsHolder
-
--- Button logic
-
-local function circleLoop()
-    if circleLoopActive or circleLoopCooldown then return end
-    circleLoopActive = true
-    circleLoopBtn.Text = "Stop Circle Loop"
-    circleLoopBtn.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
-
-    local root = getHRP(LocalPlayer)
-    if not root then
-        circleLoopActive = false
-        return
-    end
-
-    local centerPos = root.Position
-    local radius = 195
-    local humanoid = getCharacter(LocalPlayer):FindFirstChildOfClass("Humanoid")
-    if not humanoid then
-        circleLoopActive = false
-        return
-    end
-
-    local originalSpeed = humanoid.WalkSpeed
-    humanoid.WalkSpeed = 45
-
-    for i=1,5 do
-        if not circleLoopActive then break end
-        for deg = 0, 360, 5 do
-            if not circleLoopActive then break end
-            local rad = math.rad(deg)
-            local x = centerPos.X + math.cos(rad) * radius
-            local z = centerPos.Z + math.sin(rad) * radius
-            local y = centerPos.Y
-            local pos = Vector3.new(x, y, z)
-
-            -- Keep pos inside map
-            if safeCFrame(pos) then
-                teleportWithChecks(pos)
-            else
-                -- Reduce radius to find safe pos
-                local tries = 0
-                local newRadius = radius
-                local safePos = nil
-                while tries < 10 do
-                    newRadius = newRadius - 10
-                    if newRadius <= 10 then break end
-                    x = centerPos.X + math.cos(rad) * newRadius
-                    z = centerPos.Z + math.sin(rad) * newRadius
-                    pos = Vector3.new(x, y, z)
-                    if safeCFrame(pos) then
-                        safePos = pos
-                        break
-                    end
-                    tries = tries + 1
-                end
-                if safePos then
-                    teleportWithChecks(safePos)
-                end
-            end
-            task.wait(0.02)
-        end
-    end
-
-    humanoid.WalkSpeed = originalSpeed
-    circleLoopActive = false
-    circleLoopBtn.Text = "Start Circle Loop"
-    circleLoopBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-
-    circleLoopCooldown = true
-    task.delay(5, function()
-        circleLoopCooldown = false
-    end)
-end
-
-local function stopCircleLoop()
-    circleLoopActive = false
-    circleLoopBtn.Text = "Start Circle Loop"
-    circleLoopBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-end
-
-local function selfDestructLoop()
-    if selfDestructActive or selfDestructCooldown then return end
-    selfDestructActive = true
-    selfDestructBtn.Text = "Stop Self-Destruct"
-    selfDestructBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-
-    while selfDestructActive do
-        local root = getHRP(LocalPlayer)
-        if not root then break end
-        local pos = root.Position
-
-        local closestDist = math.huge
-        for _, plr in pairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer then
-                local targetHRP = getHRP(plr)
-                if targetHRP then
-                    local dist = (targetHRP.Position - pos).Magnitude
-                    if dist < closestDist then
-                        closestDist = dist
-                    end
-                end
-            end
-        end
-
-        if closestDist <= 35 then
-            showText("Self-Destruct Activating!", Color3.fromRGB(255, 0, 0), 1.5)
-            task.wait(0.75)
-            if not selfDestructActive then break end
-            teleportWithChecks(getFurthest())
-        end
-
-        task.wait(0.5)
-    end
-
-    -- Teleport to furthest spot on stop
-    teleportWithChecks(getFurthest())
-
-    selfDestructActive = false
-    selfDestructBtn.Text = "Start Self-Destruct"
-    selfDestructBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-
-    selfDestructCooldown = true
-    task.delay(12, function()
-        selfDestructCooldown = false
-    end)
-end
-
-local function stopSelfDestruct()
-    selfDestructActive = false
-end
-
-local antiAfkConnection
-local function enableAntiAfk()
-    if antiAfkActive then return end
-    antiAfkActive = true
-    antiAfkBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
-
-    antiAfkConnection = game:GetService("Players").LocalPlayer.Idled:Connect(function()
-        local VirtualUser = game:GetService("VirtualUser")
-        VirtualUser:ClickButton2(Vector2.new())
-    end)
-end
-
-local function disableAntiAfk()
-    antiAfkActive = false
-    antiAfkBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 255)
-    if antiAfkConnection then
-        antiAfkConnection:Disconnect()
-        antiAfkConnection = nil
-    end
-end
-
-local function toggleGuiVisibility()
-    guiVisible = not guiVisible
-    buttonsHolder.Visible = guiVisible
-    frame.Size = guiVisible and UDim2.new(0, 320, 0, 240) or UDim2.new(0, 45, 0, 35)
-    titleLabel.Visible = guiVisible
-end
-
--- Dragging functionality for frame
-local dragging
-local dragInput
-local dragStart
-local startPos
-
-titleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = frame.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
-    end
-end)
-
-titleBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
-end)
-
+--// Main Logic
 RunService.RenderStepped:Connect(function()
-    if dragging and dragInput then
-        local delta = dragInput.Position - dragStart
-        frame.Position = UDim2.new(
-            math.clamp(startPos.X.Scale, 0, 1),
-            math.clamp(startPos.X.Offset + delta.X, 0, workspace.CurrentCamera.ViewportSize.X - frame.AbsoluteSize.X),
-            math.clamp(startPos.Y.Scale, 0, 1),
-            math.clamp(startPos.Y.Offset + delta.Y, 0, workspace.CurrentCamera.ViewportSize.Y - frame.AbsoluteSize.Y)
-        )
-    end
+	if not active or cooldown then return end
+	getChar()
+	local closest, dist = nil, math.huge
+	for _, plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local d = (plr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
+			if d < dist then closest = plr dist = d end
+		end
+	end
+	if closest then
+		if dist <= radiusClose then -- self destruct
+			selfDestructActive = true
+			for _ = 1, 10 do
+				teleportTo(getFurthest())
+				task.wait(0.3)
+			end
+			startCooldown()
+			selfDestructActive = false
+		elseif dist <= radiusBehind then
+			local targetHRP = closest.Character and closest.Character:FindFirstChild("HumanoidRootPart")
+			if targetHRP then
+				local behind = targetHRP.CFrame * CFrame.new(0, 0,  -45)
+				if safePos(behind.Position) then
+					showText("Poof!", Color3.fromRGB(255, 255, 255), 1)
+					teleportTo(behind.Position)
+					startCooldown()
+				end
+			end
+		elseif dist <= radiusFlee then
+			if loopActive then
+				for _ = 1, 5 do
+					local furthest = getFurthest()
+					teleportTo(furthest)
+					task.wait(0.3)
+				end
+				startCooldown()
+			end
+		end
+	end
+	escapeStuck()
 end)
 
--- Toggle Button clicked
-toggleBtn.MouseButton1Click:Connect(function()
-    if guiVisible then
-        toggleGuiVisibility()
-        toggleBtn.Text = "☰"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    else
-        toggleGuiVisibility()
-        toggleBtn.Text = "✕"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    end
+--// GUI
+gui.Name = "UntouchableUI"
+local toggle = Instance.new("TextButton", gui)
+toggle.Size = UDim2.new(0,160,0,35)
+toggle.Position = UDim2.new(0,10,0,10)
+toggle.Text = "Behind Ya: OFF"
+toggle.BackgroundColor3 = Color3.fromRGB(0,0,255)
+toggle.MouseButton1Click:Connect(function()
+	active = not active
+	toggle.Text = "Behind Ya: " .. (active and "ON" or "OFF")
+	toggle.BackgroundColor3 = active and Color3.fromRGB(255,255,0) or Color3.fromRGB(0,0,255)
 end)
 
--- Button click events
-circleLoopBtn.MouseButton1Click:Connect(function()
-    if circleLoopActive then
-        stopCircleLoop()
-    else
-        if not circleLoopCooldown then
-            circleLoop()
-        else
-            showText("Circle Loop cooldown active", Color3.fromRGB(255, 165, 0), 2)
-        end
-    end
+local circleBtn = Instance.new("TextButton", gui)
+circleBtn.Size = UDim2.new(0,160,0,35)
+circleBtn.Position = UDim2.new(0,10,0,50)
+circleBtn.Text = "Toggle Circle Loop"
+circleBtn.BackgroundColor3 = Color3.fromRGB(180, 100, 255)
+circleBtn.MouseButton1Click:Connect(function()
+	loopActive = not loopActive
+	circleBtn.Text = loopActive and "Circle Loop: ON" or "Toggle Circle Loop"
 end)
 
-selfDestructBtn.MouseButton1Click:Connect(function()
-    if selfDestructActive then
-        stopSelfDestruct()
-    else
-        if not selfDestructCooldown then
-            selfDestructLoop()
-        else
-            showText("Self-Destruct cooldown active", Color3.fromRGB(255, 0, 0), 2)
-        end
-    end
+local hideBtn = Instance.new("TextButton", gui)
+hideBtn.Size = UDim2.new(0,100,0,30)
+hideBtn.Position = UDim2.new(0,180,0,10)
+hideBtn.Text = "Hide GUI"
+hideBtn.MouseButton1Click:Connect(function()
+	for _, b in pairs(gui:GetChildren()) do
+		if b:IsA("TextButton") and b ~= hideBtn then
+			b.Visible = not b.Visible
+		end
+	end
+	hideBtn.Text = hideBtn.Text == "Hide GUI" and "Show GUI" or "Hide GUI"
 end)
-
-antiAfkBtn.MouseButton1Click:Connect(function()
-    if antiAfkActive then
-        disableAntiAfk()
-    else
-        enableAntiAfk()
-    end
-end)
-
-hideGuiBtn.MouseButton1Click:Connect(function()
-    if guiVisible then
-        toggleGuiVisibility()
-        toggleBtn.Text = "☰"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    else
-        toggleGuiVisibility()
-        toggleBtn.Text = "✕"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    end
-end)
-
--- Initial message
-showText("Untouchable Script loaded!", Color3.fromRGB(255, 165, 0), 3)
-print("Untouchable Script loaded!")
