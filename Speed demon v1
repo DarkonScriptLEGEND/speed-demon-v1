@@ -1,174 +1,286 @@
 local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Debris = game:GetService("Debris")
+local ChatService = game:GetService("Chat")
 
--- Safe teleport positions
-local lastSafePosition = Character:WaitForChild("HumanoidRootPart").Position
+local player = Players.LocalPlayer
 
--- Create ScreenGui
-local gui = Instance.new("ScreenGui", game.CoreGui)
-gui.Name = "SpeedDemonGUI"
+-- SETTINGS
+local BASE_SPEED = 16
+local RUN_SPEED_BOOST = 8
+local FLEE_RADIUS = 15
+local FLEE_SPEED_DISTANCE = 50
+local EMERGENCY_RADIUS_START = 15
+local EMERGENCY_RADIUS_MIN = 25
+local EMERGENCY_RADIUS_MAX = 45
+local TELEPORT_DISTANCE = 75
+local TELEPORT_SPEED_BOOST = 27
+local TELEPORT_BOOST_TIME = 2.5
+local DODGE_DISTANCE = 25
+local DODGE_COOLDOWN = 3
+local DETECT_RADIUS = 15
+local TELEPORT_SOUND_ID = "rbxassetid://184352058"
+local TELEPORT_PARTICLE = "rbxassetid://243098098"
 
--- Toggle Icon
-local toggleButton = Instance.new("TextButton", gui)
-toggleButton.Size = UDim2.new(0, 140, 0, 30)
-toggleButton.Position = UDim2.new(0, 10, 0.5, -100)
-toggleButton.BackgroundColor3 = Color3.new(0, 0, 0)
-toggleButton.Text = "Speed Demon V1"
-toggleButton.TextColor3 = Color3.new(1, 1, 1)
-toggleButton.Draggable = true
-toggleButton.Active = true
-toggleButton.AutoButtonColor = true
+-- NEW SPEED BOOST SETTINGS
+local SPEED_BOOST_AMOUNT = 32
+local SPEED_BOOST_DURATION = 2
+local SPEED_BOOST_COOLDOWN = 7.2
 
--- Main Frame
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 220, 0, 160)
-frame.Position = UDim2.new(0, 160, 0.5, -100)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-frame.Visible = true
-frame.Active = true
+local MAP_BOUNDS = 5000
 
--- Title
-local title = Instance.new("TextLabel", frame)
-title.Size = UDim2.new(1, 0, 0, 30)
-title.Position = UDim2.new(0, 0, 0, 0)
-title.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
-title.Text = "Speed Demon V1"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.TextScaled = true
+-- STATE
+local runAwayEnabled = false
+local chaseEnabled = false
+local lastDodge = 0
+local updateTimer = 0
+local char, hrp, humanoid
+local currentEmergencyRadius = EMERGENCY_RADIUS_START
+local speedBoostCooldown = 0
 
--- Button: Speed Boost
-local speedButton = Instance.new("TextButton", frame)
-speedButton.Size = UDim2.new(1, -20, 0, 40)
-speedButton.Position = UDim2.new(0, 10, 0, 40)
-speedButton.Text = "Speed Boost"
-speedButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-speedButton.TextColor3 = Color3.new(1, 1, 1)
+-- UI
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+gui.ResetOnSpawn = false
 
--- Button: Ultimate Form
-local ultimateButton = Instance.new("TextButton", frame)
-ultimateButton.Size = UDim2.new(1, -20, 0, 40)
-ultimateButton.Position = UDim2.new(0, 10, 0, 90)
-ultimateButton.Text = "Ultimate Form"
-ultimateButton.BackgroundColor3 = Color3.fromRGB(255, 106, 0)
-ultimateButton.TextColor3 = Color3.new(1, 1, 1)
+local runBtn = Instance.new("TextButton", gui)
+runBtn.Size = UDim2.new(0, 120, 0, 40)
+runBtn.Position = UDim2.new(0, 10, 0, 10)
+runBtn.Text = "Toggle Run Away"
+runBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+runBtn.TextColor3 = Color3.new(1, 1, 1)
 
--- Button: Send Out Credits
-local creditButton = Instance.new("TextButton", gui)
-creditButton.Size = UDim2.new(0, 170, 0, 30)
-creditButton.Position = UDim2.new(1, -180, 1, -40)
-creditButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-creditButton.TextColor3 = Color3.new(1, 1, 1)
-creditButton.Text = "Send Out Credits in Chat"
-creditButton.TextScaled = true
-creditButton.AnchorPoint = Vector2.new(0, 1)
+local chaseBtn = Instance.new("TextButton", gui)
+chaseBtn.Size = UDim2.new(0, 120, 0, 40)
+chaseBtn.Position = UDim2.new(0, 10, 0, 60)
+chaseBtn.Text = "Toggle Chase"
+chaseBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+chaseBtn.TextColor3 = Color3.new(1, 1, 1)
 
--- Toggle Show/Hide
-toggleButton.MouseButton1Click:Connect(function()
-	frame.Visible = not frame.Visible
-end)
+-- New Credits Button at bottom right
+local creditsBtn = Instance.new("TextButton", gui)
+creditsBtn.Size = UDim2.new(0, 160, 0, 40)
+creditsBtn.Position = UDim2.new(1, -170, 1, -50) -- bottom right, 10px margin
+creditsBtn.Text = "Send Out Credits in Chat"
+creditsBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+creditsBtn.TextColor3 = Color3.new(1, 1, 1)
+creditsBtn.Font = Enum.Font.SourceSansBold
+creditsBtn.TextScaled = true
 
--- Speed Boost Logic
-local cooldown = false
-speedButton.MouseButton1Click:Connect(function()
-	if cooldown then return end
-	cooldown = true
-
-	local humanoid = Character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		local originalSpeed = humanoid.WalkSpeed
-		humanoid.WalkSpeed = originalSpeed + 27
-		wait(2.5)
-		humanoid.WalkSpeed = originalSpeed
-	end
-	wait(7)
-	cooldown = false
-end)
-
--- Teleport Sound
-local function playTeleportEffect(pos)
-	local hrp = Character:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
-
-	local sound = Instance.new("Sound", hrp)
-	sound.SoundId = "rbxassetid://12222005"
-	sound.Volume = 2
-	sound:Play()
-	game.Debris:AddItem(sound, 2)
-
-	for i = 1, 10 do
-		local part = Instance.new("Part")
-		part.Anchored = true
-		part.CanCollide = false
-		part.Size = Vector3.new(0.5, 0.5, 0.5)
-		part.Shape = Enum.PartType.Ball
-		part.Material = Enum.Material.Neon
-		part.Color = Color3.new(0, 0, 0)
-		part.Position = pos + Vector3.new(math.random(-3, 3), math.random(-3, 3), math.random(-3, 3))
-		part.Parent = workspace
-		game.Debris:AddItem(part, 1)
-	end
+-- Functions
+local function bindCharacter()
+	char = player.Character or player.CharacterAdded:Wait()
+	hrp = char:WaitForChild("HumanoidRootPart")
+	humanoid = char:WaitForChild("Humanoid")
 end
+player.CharacterAdded:Connect(bindCharacter)
+if player.Character then bindCharacter() end
 
--- Ultimate Form Logic
-local ultimateCooldown = false
-local function activateUltimate()
-	if ultimateCooldown then return end
-	ultimateCooldown = true
-
-	local hrp = Character:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
-
-	for i = 1, 25 do
-		local offset = Vector3.new(math.random(-75,75), 0, math.random(-75,75))
-		local targetPos = hrp.Position + offset
-		local ray = Ray.new(targetPos + Vector3.new(0, 50, 0), Vector3.new(0, -100, 0))
-		local hit, safePos = workspace:FindPartOnRay(ray)
-		if hit then
-			hrp.CFrame = CFrame.new(safePos + Vector3.new(0, 5, 0))
-			playTeleportEffect(hrp.Position)
-			wait(0.2)
+local function getNearestPlayer()
+	local nearest, dist = nil, math.huge
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local d = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+			if d < dist then
+				nearest, dist = p, d
+			end
 		end
 	end
-
-	local humanoid = Character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		local originalSpeed = humanoid.WalkSpeed
-		humanoid.WalkSpeed = 46
-		wait(5.5)
-		humanoid.WalkSpeed = originalSpeed
-	end
-	wait(10)
-	ultimateCooldown = false
+	return nearest, dist
 end
 
--- Ultimate Button Click
-ultimateButton.MouseButton1Click:Connect(activateUltimate)
+local function showDodge()
+	local gui = Instance.new("BillboardGui", hrp)
+	gui.Size = UDim2.new(0, 200, 0, 50)
+	gui.StudsOffset = Vector3.new(0, 3, 0)
+	gui.Adornee = hrp
+	gui.AlwaysOnTop = true
+	local lbl = Instance.new("TextLabel", gui)
+	lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = player.Name .. " Dodged"
+	lbl.TextScaled = true
+	lbl.TextColor3 = Color3.new(1, 1, 1)
+	Debris:AddItem(gui, 2)
+end
 
--- Auto activate ultimate if enemy near
-game:GetService("RunService").Heartbeat:Connect(function()
-	if ultimateCooldown then return end
-	local hrp = Character:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
+local function playTeleportSound()
+	local sound = Instance.new("Sound", hrp)
+	sound.SoundId = TELEPORT_SOUND_ID
+	sound.Volume = 2
+	sound:Play()
+	Debris:AddItem(sound, 2)
+end
 
-	for _, player in pairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-			local dist = (player.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
-			if dist < 8.5 then
-				activateUltimate()
+local function createTeleportParticles()
+	local part = Instance.new("ParticleEmitter")
+	part.Texture = TELEPORT_PARTICLE
+	part.Color = ColorSequence.new(Color3.new(), Color3.new())
+	part.Lifetime = NumberRange.new(0.5)
+	part.Rate = 200
+	part.Parent = hrp
+	Debris:AddItem(part, 1)
+end
+
+local function dodgeAttacks()
+	for _, p in ipairs(Workspace:GetDescendants()) do
+		if p:IsA("BasePart") then
+			local n = p.Name:lower()
+			if n:find("massinfection") or n:find("slash") or n:find("attack") or n:find("projectile") then
+				local d = (p.Position - hrp.Position).Magnitude
+				if d < DETECT_RADIUS and tick() - lastDodge > DODGE_COOLDOWN then
+					lastDodge = tick()
+					local dir = (hrp.Position - p.Position).Unit
+					hrp.CFrame = CFrame.new(hrp.Position + dir * DODGE_DISTANCE)
+					showDodge()
+					playTeleportSound()
+				end
+			end
+		end
+	end
+end
+
+local function isBlocked(from, to, step)
+	return Workspace:Raycast(from, (to - from).Unit * step, RaycastParams.new()) ~= nil
+end
+
+local function isWithinBounds(pos)
+	return math.abs(pos.X) <= MAP_BOUNDS and math.abs(pos.Z) <= MAP_BOUNDS and pos.Y > 0
+end
+
+local function getFurthestSafePosition()
+	local directions = {
+		Vector3.new(1,0,0), Vector3.new(-1,0,0), Vector3.new(0,0,1), Vector3.new(0,0,-1),
+		Vector3.new(1,0,1).Unit, Vector3.new(-1,0,1).Unit, Vector3.new(1,0,-1).Unit, Vector3.new(-1,0,-1).Unit,
+	}
+	local bestPos, maxDist = hrp.Position, 0
+	for _, dir in ipairs(directions) do
+		local pos = hrp.Position + dir * TELEPORT_DISTANCE
+		if isWithinBounds(pos) then
+			local minDist = math.huge
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+					local dist = (pos - p.Character.HumanoidRootPart.Position).Magnitude
+					if dist < minDist then minDist = dist end
+				end
+			end
+			if minDist > maxDist then
+				maxDist = minDist
+				bestPos = pos
+			end
+		end
+	end
+	return bestPos
+end
+
+local function emergencyTeleport(near)
+	local dir = (hrp.Position - near.Character.HumanoidRootPart.Position).Unit
+	local attemptPos = hrp.Position + dir * TELEPORT_DISTANCE
+	if not isWithinBounds(attemptPos) then attemptPos = hrp.Position end
+	hrp.CFrame = CFrame.new(attemptPos)
+	playTeleportSound()
+	createTeleportParticles()
+	humanoid.WalkSpeed = BASE_SPEED + TELEPORT_SPEED_BOOST
+	task.delay(TELEPORT_BOOST_TIME, function()
+		if humanoid and humanoid.WalkSpeed > BASE_SPEED then
+			humanoid.WalkSpeed = BASE_SPEED
+		end
+	end)
+	task.wait(0.1)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local dist = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+			if dist < 45 then
+				local bestPos = getFurthestSafePosition()
+				if (bestPos - hrp.Position).Magnitude > 1 then
+					hrp.CFrame = CFrame.new(bestPos)
+					playTeleportSound()
+					createTeleportParticles()
+				end
 				break
 			end
 		end
 	end
+end
+
+-- Button Events
+runBtn.MouseButton1Click:Connect(function()
+	runAwayEnabled = not runAwayEnabled
+	runBtn.Text = runAwayEnabled and "Running Enabled" or "Toggle Run Away"
 end)
 
--- Credits Button Functionality
-creditButton.MouseButton1Click:Connect(function()
-	game.StarterGui:SetCore("ChatMakeSystemMessage", {
-		Text = "Speed Demon V1 script made by Darkon",
-		Color = Color3.new(1, 1, 1),
-		Font = Enum.Font.SourceSansBold,
-		FontSize = Enum.FontSize.Size24
-	})
+chaseBtn.MouseButton1Click:Connect(function()
+	chaseEnabled = not chaseEnabled
+	chaseBtn.Text = chaseEnabled and "Chasing Enabled" or "Toggle Chase"
+end)
+
+creditsBtn.MouseButton1Click:Connect(function()
+	if not char or not hrp then return end
+	-- Use Roblox ChatService to send chat message as player
+	-- We use ChatService:Chat(part, message, chatType)
+	-- Part is usually Head or HumanoidRootPart
+	local part = char:FindFirstChild("Head") or hrp
+	if part then
+		ChatService:Chat(part, "Speed Demon V1 script made by Darkon", Enum.ChatColor.White)
+	end
+end)
+
+-- Main Loop
+RunService.RenderStepped:Connect(function(dt)
+	updateTimer += dt
+	if not hrp or not humanoid then return end
+	if updateTimer < 0.1 then return end
+	updateTimer = 0
+
+	dodgeAttacks()
+
+	if tick() > speedBoostCooldown then
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+				local dist = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+				if dist <= 10 then
+					humanoid.WalkSpeed = SPEED_BOOST_AMOUNT
+					speedBoostCooldown = tick() + SPEED_BOOST_COOLDOWN
+					task.delay(SPEED_BOOST_DURATION, function()
+						if humanoid and humanoid.WalkSpeed == SPEED_BOOST_AMOUNT then
+							humanoid.WalkSpeed = BASE_SPEED
+						end
+					end)
+					break
+				end
+			end
+		end
+	end
+
+	if runAwayEnabled then
+		local nearest, dist = getNearestPlayer()
+		if nearest and dist < FLEE_RADIUS then
+			local dir = (hrp.Position - nearest.Character.HumanoidRootPart.Position).Unit
+			hrp.CFrame = CFrame.new(hrp.Position + dir * 0.5)
+		end
+	end
+
+	if chaseEnabled then
+		local nearest, dist = getNearestPlayer()
+		if nearest then
+			local speed = 22
+			if humanoid.WalkSpeed < speed then
+				humanoid.WalkSpeed = speed
+			end
+			hrp.CFrame = CFrame.new(hrp.Position:Lerp(nearest.Character.HumanoidRootPart.Position, 0.12))
+		else
+			if humanoid.WalkSpeed > BASE_SPEED then
+				humanoid.WalkSpeed = BASE_SPEED
+			end
+		end
+	end
+
+	-- Emergency teleport if player is within emergency radius
+	local nearest, dist = getNearestPlayer()
+	if nearest and dist < currentEmergencyRadius then
+		emergencyTeleport(nearest)
+		currentEmergencyRadius = math.min(currentEmergencyRadius + 2, EMERGENCY_RADIUS_MAX)
+	else
+		currentEmergencyRadius = math.max(currentEmergencyRadius - 2, EMERGENCY_RADIUS_MIN)
+	end
 end)
