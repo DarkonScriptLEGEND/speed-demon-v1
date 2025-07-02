@@ -2,7 +2,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Debris = game:GetService("Debris")
-local ChatService = game:GetService("Chat")
 
 local player = Players.LocalPlayer
 
@@ -56,16 +55,6 @@ chaseBtn.Position = UDim2.new(0, 10, 0, 60)
 chaseBtn.Text = "Toggle Chase"
 chaseBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
 chaseBtn.TextColor3 = Color3.new(1, 1, 1)
-
--- New Credits Button at bottom right
-local creditsBtn = Instance.new("TextButton", gui)
-creditsBtn.Size = UDim2.new(0, 160, 0, 40)
-creditsBtn.Position = UDim2.new(1, -170, 1, -50) -- bottom right, 10px margin
-creditsBtn.Text = "Send Out Credits in Chat"
-creditsBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-creditsBtn.TextColor3 = Color3.new(1, 1, 1)
-creditsBtn.Font = Enum.Font.SourceSansBold
-creditsBtn.TextScaled = true
 
 -- Functions
 local function bindCharacter()
@@ -214,17 +203,6 @@ chaseBtn.MouseButton1Click:Connect(function()
 	chaseBtn.Text = chaseEnabled and "Chasing Enabled" or "Toggle Chase"
 end)
 
-creditsBtn.MouseButton1Click:Connect(function()
-	if not char or not hrp then return end
-	-- Use Roblox ChatService to send chat message as player
-	-- We use ChatService:Chat(part, message, chatType)
-	-- Part is usually Head or HumanoidRootPart
-	local part = char:FindFirstChild("Head") or hrp
-	if part then
-		ChatService:Chat(part, "Speed Demon V1 script made by Darkon", Enum.ChatColor.White)
-	end
-end)
-
 -- Main Loop
 RunService.RenderStepped:Connect(function(dt)
 	updateTimer += dt
@@ -252,35 +230,45 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 	end
 
-	if runAwayEnabled then
-		local nearest, dist = getNearestPlayer()
-		if nearest and dist < FLEE_RADIUS then
-			local dir = (hrp.Position - nearest.Character.HumanoidRootPart.Position).Unit
-			hrp.CFrame = CFrame.new(hrp.Position + dir * 0.5)
-		end
-	end
+	local near, dist = getNearestPlayer()
+	humanoid.WalkSpeed = BASE_SPEED
 
-	if chaseEnabled then
-		local nearest, dist = getNearestPlayer()
-		if nearest then
-			local speed = 22
-			if humanoid.WalkSpeed < speed then
-				humanoid.WalkSpeed = speed
+	if runAwayEnabled and near then
+		local phrp = near.Character and near.Character:FindFirstChild("HumanoidRootPart")
+		if phrp then
+			if dist < currentEmergencyRadius then
+				emergencyTeleport(near)
+				currentEmergencyRadius = math.random(EMERGENCY_RADIUS_MIN, EMERGENCY_RADIUS_MAX)
+				return
 			end
-			hrp.CFrame = CFrame.new(hrp.Position:Lerp(nearest.Character.HumanoidRootPart.Position, 0.12))
-		else
-			if humanoid.WalkSpeed > BASE_SPEED then
+			local dir = (hrp.Position - phrp.Position).Unit
+			local desired = hrp.Position + dir * 5
+			if isBlocked(hrp.Position, desired, 4) then
+				local rv = hrp.CFrame.RightVector * 10
+				local left = hrp.Position - rv
+				local right = hrp.Position + rv
+				if not isBlocked(hrp.Position, left, 4) then
+					desired = left
+				elseif not isBlocked(hrp.Position, right, 4) then
+					desired = right
+				else
+					humanoid.Jump = true
+				end
+			end
+			humanoid:MoveTo(desired)
+			if dist <= FLEE_RADIUS then
+				humanoid.WalkSpeed = BASE_SPEED + RUN_SPEED_BOOST
+			elseif dist >= FLEE_SPEED_DISTANCE then
 				humanoid.WalkSpeed = BASE_SPEED
 			end
 		end
-	end
-
-	-- Emergency teleport if player is within emergency radius
-	local nearest, dist = getNearestPlayer()
-	if nearest and dist < currentEmergencyRadius then
-		emergencyTeleport(nearest)
-		currentEmergencyRadius = math.min(currentEmergencyRadius + 2, EMERGENCY_RADIUS_MAX)
-	else
-		currentEmergencyRadius = math.max(currentEmergencyRadius - 2, EMERGENCY_RADIUS_MIN)
+	elseif chaseEnabled and near then
+		local phrp = near.Character and near.Character:FindFirstChild("HumanoidRootPart")
+		if phrp then
+			local dir = (phrp.Position - hrp.Position).Unit
+			local targetPos = hrp.Position + dir * 5
+			humanoid:MoveTo(targetPos)
+			humanoid.WalkSpeed = 27 -- 👈 sets chasing WalkSpeed here
+		end
 	end
 end)
