@@ -1,0 +1,274 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Debris = game:GetService("Debris")
+
+local player = Players.LocalPlayer
+
+-- SETTINGS
+local BASE_SPEED = 16
+local RUN_SPEED_BOOST = 8
+local FLEE_RADIUS = 15
+local FLEE_SPEED_DISTANCE = 50
+local EMERGENCY_RADIUS_START = 15
+local EMERGENCY_RADIUS_MIN = 25
+local EMERGENCY_RADIUS_MAX = 45
+local TELEPORT_DISTANCE = 75
+local TELEPORT_SPEED_BOOST = 27
+local TELEPORT_BOOST_TIME = 2.5
+local DODGE_DISTANCE = 25
+local DODGE_COOLDOWN = 3
+local DETECT_RADIUS = 15
+local TELEPORT_SOUND_ID = "rbxassetid://184352058"
+local TELEPORT_PARTICLE = "rbxassetid://243098098"
+
+-- NEW SPEED BOOST SETTINGS
+local SPEED_BOOST_AMOUNT = 32
+local SPEED_BOOST_DURATION = 2
+local SPEED_BOOST_COOLDOWN = 7.2
+
+local MAP_BOUNDS = 5000
+
+-- STATE
+local runAwayEnabled = false
+local chaseEnabled = false
+local lastDodge = 0
+local updateTimer = 0
+local char, hrp, humanoid
+local currentEmergencyRadius = EMERGENCY_RADIUS_START
+local speedBoostCooldown = 0
+
+-- UI
+local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
+gui.ResetOnSpawn = false
+
+local runBtn = Instance.new("TextButton", gui)
+runBtn.Size = UDim2.new(0, 120, 0, 40)
+runBtn.Position = UDim2.new(0, 10, 0, 10)
+runBtn.Text = "Toggle Run Away"
+runBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+runBtn.TextColor3 = Color3.new(1, 1, 1)
+
+local chaseBtn = Instance.new("TextButton", gui)
+chaseBtn.Size = UDim2.new(0, 120, 0, 40)
+chaseBtn.Position = UDim2.new(0, 10, 0, 60)
+chaseBtn.Text = "Toggle Chase"
+chaseBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+chaseBtn.TextColor3 = Color3.new(1, 1, 1)
+
+-- Functions
+local function bindCharacter()
+	char = player.Character or player.CharacterAdded:Wait()
+	hrp = char:WaitForChild("HumanoidRootPart")
+	humanoid = char:WaitForChild("Humanoid")
+end
+player.CharacterAdded:Connect(bindCharacter)
+if player.Character then bindCharacter() end
+
+local function getNearestPlayer()
+	local nearest, dist = nil, math.huge
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local d = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+			if d < dist then
+				nearest, dist = p, d
+			end
+		end
+	end
+	return nearest, dist
+end
+
+local function showDodge()
+	local gui = Instance.new("BillboardGui", hrp)
+	gui.Size = UDim2.new(0, 200, 0, 50)
+	gui.StudsOffset = Vector3.new(0, 3, 0)
+	gui.Adornee = hrp
+	gui.AlwaysOnTop = true
+	local lbl = Instance.new("TextLabel", gui)
+	lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = player.Name .. " Dodged"
+	lbl.TextScaled = true
+	lbl.TextColor3 = Color3.new(1, 1, 1)
+	Debris:AddItem(gui, 2)
+end
+
+local function playTeleportSound()
+	local sound = Instance.new("Sound", hrp)
+	sound.SoundId = TELEPORT_SOUND_ID
+	sound.Volume = 2
+	sound:Play()
+	Debris:AddItem(sound, 2)
+end
+
+local function createTeleportParticles()
+	local part = Instance.new("ParticleEmitter")
+	part.Texture = TELEPORT_PARTICLE
+	part.Color = ColorSequence.new(Color3.new(), Color3.new())
+	part.Lifetime = NumberRange.new(0.5)
+	part.Rate = 200
+	part.Parent = hrp
+	Debris:AddItem(part, 1)
+end
+
+local function dodgeAttacks()
+	for _, p in ipairs(Workspace:GetDescendants()) do
+		if p:IsA("BasePart") then
+			local n = p.Name:lower()
+			if n:find("massinfection") or n:find("slash") or n:find("attack") or n:find("projectile") then
+				local d = (p.Position - hrp.Position).Magnitude
+				if d < DETECT_RADIUS and tick() - lastDodge > DODGE_COOLDOWN then
+					lastDodge = tick()
+					local dir = (hrp.Position - p.Position).Unit
+					hrp.CFrame = CFrame.new(hrp.Position + dir * DODGE_DISTANCE)
+					showDodge()
+					playTeleportSound()
+				end
+			end
+		end
+	end
+end
+
+local function isBlocked(from, to, step)
+	return Workspace:Raycast(from, (to - from).Unit * step, RaycastParams.new()) ~= nil
+end
+
+local function isWithinBounds(pos)
+	return math.abs(pos.X) <= MAP_BOUNDS and math.abs(pos.Z) <= MAP_BOUNDS and pos.Y > 0
+end
+
+local function getFurthestSafePosition()
+	local directions = {
+		Vector3.new(1,0,0), Vector3.new(-1,0,0), Vector3.new(0,0,1), Vector3.new(0,0,-1),
+		Vector3.new(1,0,1).Unit, Vector3.new(-1,0,1).Unit, Vector3.new(1,0,-1).Unit, Vector3.new(-1,0,-1).Unit,
+	}
+	local bestPos, maxDist = hrp.Position, 0
+	for _, dir in ipairs(directions) do
+		local pos = hrp.Position + dir * TELEPORT_DISTANCE
+		if isWithinBounds(pos) then
+			local minDist = math.huge
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+					local dist = (pos - p.Character.HumanoidRootPart.Position).Magnitude
+					if dist < minDist then minDist = dist end
+				end
+			end
+			if minDist > maxDist then
+				maxDist = minDist
+				bestPos = pos
+			end
+		end
+	end
+	return bestPos
+end
+
+local function emergencyTeleport(near)
+	local dir = (hrp.Position - near.Character.HumanoidRootPart.Position).Unit
+	local attemptPos = hrp.Position + dir * TELEPORT_DISTANCE
+	if not isWithinBounds(attemptPos) then attemptPos = hrp.Position end
+	hrp.CFrame = CFrame.new(attemptPos)
+	playTeleportSound()
+	createTeleportParticles()
+	humanoid.WalkSpeed = BASE_SPEED + TELEPORT_SPEED_BOOST
+	task.delay(TELEPORT_BOOST_TIME, function()
+		if humanoid and humanoid.WalkSpeed > BASE_SPEED then
+			humanoid.WalkSpeed = BASE_SPEED
+		end
+	end)
+	task.wait(0.1)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local dist = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+			if dist < 45 then
+				local bestPos = getFurthestSafePosition()
+				if (bestPos - hrp.Position).Magnitude > 1 then
+					hrp.CFrame = CFrame.new(bestPos)
+					playTeleportSound()
+					createTeleportParticles()
+				end
+				break
+			end
+		end
+	end
+end
+
+-- Button Events
+runBtn.MouseButton1Click:Connect(function()
+	runAwayEnabled = not runAwayEnabled
+	runBtn.Text = runAwayEnabled and "Running Enabled" or "Toggle Run Away"
+end)
+
+chaseBtn.MouseButton1Click:Connect(function()
+	chaseEnabled = not chaseEnabled
+	chaseBtn.Text = chaseEnabled and "Chasing Enabled" or "Toggle Chase"
+end)
+
+-- Main Loop
+RunService.RenderStepped:Connect(function(dt)
+	updateTimer += dt
+	if not hrp or not humanoid then return end
+	if updateTimer < 0.1 then return end
+	updateTimer = 0
+
+	dodgeAttacks()
+
+	if tick() > speedBoostCooldown then
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+				local dist = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+				if dist <= 10 then
+					humanoid.WalkSpeed = SPEED_BOOST_AMOUNT
+					speedBoostCooldown = tick() + SPEED_BOOST_COOLDOWN
+					task.delay(SPEED_BOOST_DURATION, function()
+						if humanoid and humanoid.WalkSpeed == SPEED_BOOST_AMOUNT then
+							humanoid.WalkSpeed = BASE_SPEED
+						end
+					end)
+					break
+				end
+			end
+		end
+	end
+
+	local near, dist = getNearestPlayer()
+	humanoid.WalkSpeed = BASE_SPEED
+
+	if runAwayEnabled and near then
+		local phrp = near.Character and near.Character:FindFirstChild("HumanoidRootPart")
+		if phrp then
+			if dist < currentEmergencyRadius then
+				emergencyTeleport(near)
+				currentEmergencyRadius = math.random(EMERGENCY_RADIUS_MIN, EMERGENCY_RADIUS_MAX)
+				return
+			end
+			local dir = (hrp.Position - phrp.Position).Unit
+			local desired = hrp.Position + dir * 5
+			if isBlocked(hrp.Position, desired, 4) then
+				local rv = hrp.CFrame.RightVector * 10
+				local left = hrp.Position - rv
+				local right = hrp.Position + rv
+				if not isBlocked(hrp.Position, left, 4) then
+					desired = left
+				elseif not isBlocked(hrp.Position, right, 4) then
+					desired = right
+				else
+					humanoid.Jump = true
+				end
+			end
+			humanoid:MoveTo(desired)
+			if dist <= FLEE_RADIUS then
+				humanoid.WalkSpeed = BASE_SPEED + RUN_SPEED_BOOST
+			elseif dist >= FLEE_SPEED_DISTANCE then
+				humanoid.WalkSpeed = BASE_SPEED
+			end
+		end
+	elseif chaseEnabled and near then
+		local phrp = near.Character and near.Character:FindFirstChild("HumanoidRootPart")
+		if phrp then
+			local dir = (phrp.Position - hrp.Position).Unit
+			local targetPos = hrp.Position + dir * 5
+			humanoid:MoveTo(targetPos)
+			humanoid.WalkSpeed = 27 -- 👈 sets chasing WalkSpeed here
+		end
+	end
+end)
