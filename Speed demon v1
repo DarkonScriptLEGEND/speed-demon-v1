@@ -1,3 +1,4 @@
+-- Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -22,7 +23,6 @@ local DETECT_RADIUS = 15
 local TELEPORT_SOUND_ID = "rbxassetid://184352058"
 local TELEPORT_PARTICLE = "rbxassetid://243098098"
 
--- NEW SPEED BOOST SETTINGS
 local SPEED_BOOST_AMOUNT = 32
 local SPEED_BOOST_DURATION = 2
 local SPEED_BOOST_COOLDOWN = 7.2
@@ -32,6 +32,7 @@ local MAP_BOUNDS = 5000
 -- STATE
 local runAwayEnabled = false
 local chaseEnabled = false
+local dodgeEnabled = false
 local lastDodge = 0
 local updateTimer = 0
 local char, hrp, humanoid
@@ -42,19 +43,19 @@ local speedBoostCooldown = 0
 local gui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
 gui.ResetOnSpawn = false
 
-local runBtn = Instance.new("TextButton", gui)
-runBtn.Size = UDim2.new(0, 120, 0, 40)
-runBtn.Position = UDim2.new(0, 10, 0, 10)
-runBtn.Text = "Toggle Run Away"
-runBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
-runBtn.TextColor3 = Color3.new(1, 1, 1)
+local function createButton(name, pos, color)
+	local btn = Instance.new("TextButton", gui)
+	btn.Size = UDim2.new(0, 120, 0, 40)
+	btn.Position = UDim2.new(0, 10, 0, pos)
+	btn.Text = name
+	btn.BackgroundColor3 = color
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	return btn
+end
 
-local chaseBtn = Instance.new("TextButton", gui)
-chaseBtn.Size = UDim2.new(0, 120, 0, 40)
-chaseBtn.Position = UDim2.new(0, 10, 0, 60)
-chaseBtn.Text = "Toggle Chase"
-chaseBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-chaseBtn.TextColor3 = Color3.new(1, 1, 1)
+local runBtn = createButton("Toggle Run Away", 10, Color3.fromRGB(200, 0, 0))
+local chaseBtn = createButton("Toggle Chase", 60, Color3.fromRGB(0, 100, 200))
+local dodgeBtn = createButton("Toggle Dodge", 110, Color3.fromRGB(100, 100, 0))
 
 -- Functions
 local function bindCharacter()
@@ -111,6 +112,7 @@ local function createTeleportParticles()
 	Debris:AddItem(part, 1)
 end
 
+-- Passive dodge against attacks
 local function dodgeAttacks()
 	for _, p in ipairs(Workspace:GetDescendants()) do
 		if p:IsA("BasePart") then
@@ -126,6 +128,18 @@ local function dodgeAttacks()
 				end
 			end
 		end
+	end
+end
+
+-- Toggle-based dodge: triggered by nearby players
+local function toggleDodge()
+	local near, dist = getNearestPlayer()
+	if dodgeEnabled and near and dist <= DETECT_RADIUS and tick() - lastDodge > DODGE_COOLDOWN then
+		lastDodge = tick()
+		local dir = (hrp.Position - near.Character.HumanoidRootPart.Position).Unit
+		hrp.CFrame = CFrame.new(hrp.Position + dir * DODGE_DISTANCE)
+		showDodge()
+		playTeleportSound()
 	end
 end
 
@@ -203,6 +217,11 @@ chaseBtn.MouseButton1Click:Connect(function()
 	chaseBtn.Text = chaseEnabled and "Chasing Enabled" or "Toggle Chase"
 end)
 
+dodgeBtn.MouseButton1Click:Connect(function()
+	dodgeEnabled = not dodgeEnabled
+	dodgeBtn.Text = dodgeEnabled and "Dodge ON" or "Toggle Dodge"
+end)
+
 -- Main Loop
 RunService.RenderStepped:Connect(function(dt)
 	updateTimer += dt
@@ -211,6 +230,7 @@ RunService.RenderStepped:Connect(function(dt)
 	updateTimer = 0
 
 	dodgeAttacks()
+	toggleDodge()
 
 	if tick() > speedBoostCooldown then
 		for _, p in ipairs(Players:GetPlayers()) do
@@ -268,7 +288,7 @@ RunService.RenderStepped:Connect(function(dt)
 			local dir = (phrp.Position - hrp.Position).Unit
 			local targetPos = hrp.Position + dir * 5
 			humanoid:MoveTo(targetPos)
-			humanoid.WalkSpeed = 45 -- 👈 sets chasing WalkSpeed here
+			humanoid.WalkSpeed = 45
 		end
 	end
 end)
