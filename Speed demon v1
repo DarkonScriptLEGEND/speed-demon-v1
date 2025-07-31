@@ -268,7 +268,7 @@ RunService.RenderStepped:Connect(function(dt)
 			local dir = (phrp.Position - hrp.Position).Unit
 			local targetPos = hrp.Position + dir * 5
 			humanoid:MoveTo(targetPos)
-			humanoid.WalkSpeed = 27 -- 👈 sets chasing WalkSpeed here
+			humanoid.WalkSpeed = 45 -- 👈 sets chasing WalkSpeed here
 		end
 	end
 end)
