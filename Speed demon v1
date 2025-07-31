@@ -6,8 +6,8 @@ local Debris = game:GetService("Debris")
 local player = Players.LocalPlayer
 
 -- SETTINGS
-local BASE_SPEED = 16
-local RUN_SPEED_BOOST = 8
+local BASE_SPEED = 30
+local RUN_SPEED_BOOST = 30
 local FLEE_RADIUS = 15
 local FLEE_SPEED_DISTANCE = 50
 local EMERGENCY_RADIUS_START = 15
